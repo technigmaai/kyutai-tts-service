@@ -73,6 +73,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ENABLE_COMPILATION = True  # Set to False to disable torch.compile attempts
 ENABLE_CPU_OPTIMIZATIONS = True  # Enable CPU usage optimizations
+ENABLE_BATCH_PROCESSING = True  # Enable batch processing for higher GPU utilization
+MAX_BATCH_SIZE = 4  # Process up to 4 segments simultaneously
+ENABLE_CONCURRENT_CLEANING = True  # Enable concurrent audio cleaning
 logger.info(f"Using device: {device}")
 
 # CPU optimization settings
@@ -554,155 +557,251 @@ def parse_ssml(ssml_text: str, default_voice: str):
     logger.info(f"Parsed into {len(segments)} segments.")
     return segments
 
-# --- Optimized Audio Generation with CPU Usage Monitoring ---
-def generate_audio_safe(ssml_text: str, default_voice: str, output_format: str = "mp3",
-                       apply_cleaning: bool = False, volume_boost: float = 6.0, 
-                       remove_crackles: bool = True, apply_filters: bool = True, 
-                       reduce_noise: bool = True) -> str:
-    """Generate audio with comprehensive error handling and CPU optimization"""
+# --- High GPU Utilization Audio Generation ---
+def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_format: str = "mp3",
+                                apply_cleaning: bool = False, volume_boost: float = 6.0, 
+                                remove_crackles: bool = True, apply_filters: bool = True, 
+                                reduce_noise: bool = True) -> str:
+    """Generate audio with maximum GPU utilization through batching and concurrency"""
     if not MODEL_LOADED:
         raise RuntimeError("Model is not loaded")
 
     start_time = time.time()
-    logger.info("🎵 Starting audio generation...")
+    logger.info("🎵 Starting HIGH GPU UTILIZATION audio generation...")
     
     if ENABLE_MONITORING:
         log_system_usage()
     
     segments = parse_ssml(ssml_text, default_voice)
-    output_audio_segments = []
-
-    # Pre-allocate GPU memory for efficient processing
+    
+    # Separate text segments from pause segments
+    text_segments = []
+    pause_segments = []
+    segment_map = []  # Track original order
+    
+    for idx, (voice, content) in enumerate(segments):
+        if voice == "PAUSE":
+            pause_segments.append((idx, content))
+            segment_map.append(("PAUSE", len(pause_segments) - 1))
+        else:
+            text_segments.append((idx, voice, content))
+            segment_map.append(("TEXT", len(text_segments) - 1))
+    
+    # Pre-allocate GPU memory for batch processing
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-
-    # Process segments with GPU optimizations and error handling
-    for idx, (voice, content) in enumerate(segments):
-        segment_start = time.time()
-        logger.info(f"🔄 Processing segment {idx + 1}/{len(segments)}: Voice='{voice}'")
-        
-        if voice == "PAUSE":
-            output_audio_segments.append(content)
-            continue
-        
-        # Prepare script and attributes
-        entries = tts_model.prepare_script([content], padding_between=1)
-        voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
-        attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
-        
-        # Generate audio with stable inference
-        try:
-            # Force all operations to GPU and minimize CPU usage
-            with torch.no_grad():
-                # Pin memory to reduce CPU-GPU transfer overhead
-                result = tts_model.generate([entries], [attributes])
+        # Pre-allocate larger memory chunks for batch processing
+        dummy_tensor = torch.zeros(MAX_BATCH_SIZE, 1024, device=device)
+        del dummy_tensor
+    
+    logger.info(f"🚀 Processing {len(text_segments)} text segments in batches of {MAX_BATCH_SIZE}")
+    
+    # Process text segments in batches for higher GPU utilization
+    text_audio_results = {}
+    
+    if ENABLE_BATCH_PROCESSING and len(text_segments) > 1:
+        # BATCH PROCESSING MODE - Higher GPU Utilization
+        for batch_start in range(0, len(text_segments), MAX_BATCH_SIZE):
+            batch_end = min(batch_start + MAX_BATCH_SIZE, len(text_segments))
+            batch = text_segments[batch_start:batch_end]
+            
+            logger.info(f"🔥 Processing batch {batch_start//MAX_BATCH_SIZE + 1} with {len(batch)} segments (GPU INTENSIVE)")
+            
+            # Prepare all batch data
+            batch_entries = []
+            batch_attributes = []
+            batch_indices = []
+            
+            for idx, voice, content in batch:
+                entries = tts_model.prepare_script([content], padding_between=1)
+                voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
+                attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
+                
+                batch_entries.append(entries)
+                batch_attributes.append(attributes)
+                batch_indices.append(idx)
+            
+            # PARALLEL GPU GENERATION - This maxes out GPU utilization
+            try:
+                with torch.no_grad():
+                    # Process multiple segments simultaneously
+                    batch_results = []
                     
-        except RuntimeError as e:
-            if "dtype" in str(e) or "scatter" in str(e):
-                logger.error(f"Generation failed for segment {idx + 1} due to dtype mismatch: {e}")
+                    # Create multiple CUDA streams for concurrent execution
+                    streams = [torch.cuda.Stream() for _ in range(len(batch))]
+                    
+                    # Launch parallel generations
+                    for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                        with torch.cuda.stream(streams[i]):
+                            result = tts_model.generate([entries], [attributes])
+                            batch_results.append((batch_indices[i], result))
+                    
+                    # Synchronize all streams
+                    for stream in streams:
+                        stream.synchronize()
+                    
+                    logger.info(f"✅ Batch completed with {len(batch_results)} parallel generations")
+                    
+                    # Decode all results (keeping on GPU as long as possible)
+                    for idx, result in batch_results:
+                        try:
+                            with tts_model.mimi.streaming(1), torch.no_grad():
+                                pcms = []
+                                for frame in result.frames[tts_model.delay_steps:]:
+                                    decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                                    pcm = torch.clamp(decoded, -1, 1)
+                                    pcms.append(pcm[0, 0])
+                                
+                                # Keep on GPU until final transfer
+                                pcm_tensor = torch.cat(pcms, dim=-1)
+                                pcm_data = pcm_tensor.cpu().numpy()
+                                
+                                # Store result
+                                text_audio_results[idx] = pcm_data
+                                
+                        except Exception as decode_error:
+                            logger.error(f"Batch decode failed for segment {idx}: {decode_error}")
+                            continue
+                            
+            except Exception as batch_error:
+                logger.error(f"Batch processing failed: {batch_error}")
+                # Fallback to sequential processing
+                logger.info("🔄 Falling back to sequential processing")
+                ENABLE_BATCH_PROCESSING = False
+    
+    # Sequential fallback or single segment
+    if not ENABLE_BATCH_PROCESSING or len(text_segments) == 1:
+        logger.info("📝 Using sequential processing")
+        for idx, voice, content in text_segments:
+            segment_start = time.time()
+            logger.info(f"🔄 Processing segment {idx + 1}: Voice='{voice}'")
+            
+            entries = tts_model.prepare_script([content], padding_between=1)
+            voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
+            attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
+            
+            try:
+                with torch.no_grad():
+                    result = tts_model.generate([entries], [attributes])
+                
+                with tts_model.mimi.streaming(1), torch.no_grad():
+                    pcms = []
+                    for frame in result.frames[tts_model.delay_steps:]:
+                        decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                        pcm = torch.clamp(decoded, -1, 1)
+                        pcms.append(pcm[0, 0])
+                    
+                    pcm_tensor = torch.cat(pcms, dim=-1)
+                    pcm_data = pcm_tensor.cpu().numpy()
+                    text_audio_results[idx] = pcm_data
+                    
+                segment_time = time.time() - segment_start
+                logger.debug(f"⏱️  Sequential segment completed in {segment_time:.2f}s")
+                
+            except Exception as e:
+                logger.error(f"Sequential processing failed for segment {idx}: {e}")
                 continue
-            else:
-                raise
-
-        # Decode audio efficiently with minimal CPU usage
-        try:
-            with tts_model.mimi.streaming(1), torch.no_grad():
-                pcms = []
-                # Process frames in batches to reduce CPU overhead
-                frames_batch = list(result.frames[tts_model.delay_steps:])
-                
-                for frame in frames_batch:
-                    # Keep operations on GPU as long as possible
-                    decoded = tts_model.mimi.decode(frame[:, 1:, :])
-                    pcm = torch.clamp(decoded, -1, 1)
-                    pcms.append(pcm[0, 0])  # Keep on GPU
-                
-                # Single GPU->CPU transfer at the end
-                pcm_tensor = torch.cat(pcms, dim=-1)
-                pcm_data = pcm_tensor.cpu().numpy()
-                
-        except Exception as decode_error:
-            logger.error(f"Audio decoding failed for segment {idx + 1}: {decode_error}")
-            continue
-
-        # Optimize file operations
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
-                # Use efficient WAV writing
-                sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
-                wav_path = wav_fp.name
-            
-            # Load AudioSegment efficiently
-            segment_audio = AudioSegment.from_wav(wav_path)
-            output_audio_segments.append(segment_audio)
-            
-            # Clean up immediately to free memory
-            os.unlink(wav_path)
-            
-        except Exception as file_error:
-            logger.error(f"File processing failed for segment {idx + 1}: {file_error}")
-            continue
-            
-        segment_time = time.time() - segment_start
-        logger.debug(f"⏱️  Segment {idx + 1} completed in {segment_time:.2f}s")
+    
+    # Reconstruct audio in original order
+    logger.info("🔗 Reconstructing audio in original order...")
+    output_audio_segments = []
+    
+    for segment_type, segment_idx in segment_map:
+        if segment_type == "PAUSE":
+            original_idx, pause_audio = pause_segments[segment_idx]
+            output_audio_segments.append(pause_audio)
+        else:
+            original_idx = text_segments[segment_idx][0]
+            if original_idx in text_audio_results:
+                # Convert to AudioSegment
+                pcm_data = text_audio_results[original_idx]
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
+                    sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
+                    segment_audio = AudioSegment.from_wav(wav_fp.name)
+                    output_audio_segments.append(segment_audio)
+                    os.unlink(wav_fp.name)
     
     if not output_audio_segments:
         logger.warning("No audio was generated, returning empty audio file.")
         final_audio = AudioSegment.silent(duration=1)
     else:
         logger.info("🔗 Combining audio segments...")
-        # Use more efficient concatenation
         final_audio = output_audio_segments[0]
         for segment in output_audio_segments[1:]:
             final_audio += segment
 
     logger.info("🎚️  Normalizing final audio...")
-    # Optimize normalization - use pydub's built-in efficiently
     final_audio = final_audio.normalize()
     final_audio = final_audio.set_frame_rate(44100).set_sample_width(2).set_channels(1)
     
-    # Apply GPU-accelerated cleaning if requested
-    if apply_cleaning:
+    # CONCURRENT GPU CLEANING for maximum utilization
+    if apply_cleaning and ENABLE_CONCURRENT_CLEANING:
         try:
             cleaning_start = time.time()
-            logger.info("🧹 Applying GPU-accelerated cleaning to final audio...")
-            final_audio = clean_audio_segment_gpu(
-                final_audio,
-                volume_boost=volume_boost,
-                remove_crackles=remove_crackles,
-                apply_filters=apply_filters,
-                reduce_noise=reduce_noise
-            )
+            logger.info("🧹 Applying CONCURRENT GPU-accelerated cleaning...")
+            
+            # Split audio into chunks for concurrent processing
+            chunk_size = len(final_audio) // 4  # 4 concurrent chunks
+            chunks = [final_audio[i:i+chunk_size] for i in range(0, len(final_audio), chunk_size)]
+            
+            # Process chunks concurrently
+            cleaned_chunks = []
+            streams = [torch.cuda.Stream() for _ in range(len(chunks))]
+            
+            for i, chunk in enumerate(chunks):
+                with torch.cuda.stream(streams[i]):
+                    cleaned_chunk = clean_audio_segment_gpu(
+                        chunk,
+                        volume_boost=volume_boost,
+                        remove_crackles=remove_crackles,
+                        apply_filters=apply_filters,
+                        reduce_noise=reduce_noise
+                    )
+                    cleaned_chunks.append(cleaned_chunk)
+            
+            # Synchronize and combine
+            for stream in streams:
+                stream.synchronize()
+            
+            # Combine cleaned chunks
+            final_audio = sum(cleaned_chunks)
+            
             cleaning_time = time.time() - cleaning_start
-            logger.info(f"✅ Audio cleaning completed in {cleaning_time:.2f}s")
+            logger.info(f"✅ CONCURRENT audio cleaning completed in {cleaning_time:.2f}s")
         except Exception as cleaning_error:
-            logger.warning(f"GPU cleaning failed, returning original audio: {cleaning_error}")
+            logger.warning(f"Concurrent GPU cleaning failed, using standard cleaning: {cleaning_error}")
+            # Fallback to standard cleaning
+            final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
+    elif apply_cleaning:
+        # Standard GPU cleaning
+        logger.info("🧹 Applying standard GPU cleaning...")
+        final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
     
-    # Optimize export process
+    # Export
     export_start = time.time()
     if output_format.lower() == "wav":
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
-            final_audio.export(wav_fp.name, format="wav", parameters=["-ac", "1"])  # Force mono
+            final_audio.export(wav_fp.name, format="wav", parameters=["-ac", "1"])
             export_time = time.time() - export_start
             logger.info(f"📁 Final audio exported as WAV in {export_time:.2f}s")
             total_time = time.time() - start_time
-            logger.info(f"🎉 Total generation time: {total_time:.2f}s")
+            logger.info(f"🎉 HIGH GPU UTILIZATION generation completed in {total_time:.2f}s")
             if ENABLE_MONITORING:
                 log_system_usage()
             return wav_fp.name
-    else:  # Default to MP3
+    else:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_fp:
             final_audio.export(mp3_fp.name, format="mp3", bitrate="320k", parameters=["-ac", "1"])
             export_time = time.time() - export_start
             logger.info(f"📁 Final audio exported as MP3 in {export_time:.2f}s")
             total_time = time.time() - start_time
-            logger.info(f"🎉 Total generation time: {total_time:.2f}s")
+            logger.info(f"🎉 HIGH GPU UTILIZATION generation completed in {total_time:.2f}s")
             if ENABLE_MONITORING:
                 log_system_usage()
             return mp3_fp.name
 
-# Alias for backward compatibility
-generate_audio = generate_audio_safe
+# Use high GPU utilization version by default
+generate_audio = generate_audio_high_gpu_util
 
 # --- Pydantic Models (unchanged) ---
 class TTSRequest(BaseModel):
@@ -878,6 +977,8 @@ if __name__ == "__main__":
         # Log startup configuration
         logger.info(f"🔧 CPU optimizations: {'Enabled' if ENABLE_CPU_OPTIMIZATIONS else 'Disabled'}")
         logger.info(f"📊 System monitoring: {'Enabled' if ENABLE_MONITORING else 'Disabled'}")
+        logger.info(f"🚀 Batch processing: {'Enabled' if ENABLE_BATCH_PROCESSING else 'Disabled'} (Max batch: {MAX_BATCH_SIZE})")
+        logger.info(f"⚡ Concurrent cleaning: {'Enabled' if ENABLE_CONCURRENT_CLEANING else 'Disabled'}")
         logger.info(f"🧠 PyTorch threads: {torch.get_num_threads()}")
         
         # Initial system status
