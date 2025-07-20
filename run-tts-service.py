@@ -563,6 +563,8 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                                 remove_crackles: bool = True, apply_filters: bool = True, 
                                 reduce_noise: bool = True) -> str:
     """Generate audio with maximum GPU utilization through batching and concurrency"""
+    global ENABLE_BATCH_PROCESSING  # Fix scoping issue
+    
     if not MODEL_LOADED:
         raise RuntimeError("Model is not loaded")
 
@@ -591,15 +593,19 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         # Pre-allocate larger memory chunks for batch processing
-        dummy_tensor = torch.zeros(MAX_BATCH_SIZE, 1024, device=device)
-        del dummy_tensor
+        try:
+            dummy_tensor = torch.zeros(MAX_BATCH_SIZE, 1024, device=device)
+            del dummy_tensor
+        except:
+            pass  # Continue if allocation fails
     
     logger.info(f"🚀 Processing {len(text_segments)} text segments in batches of {MAX_BATCH_SIZE}")
     
     # Process text segments in batches for higher GPU utilization
     text_audio_results = {}
+    batch_processing_enabled = ENABLE_BATCH_PROCESSING  # Local copy to avoid scoping issues
     
-    if ENABLE_BATCH_PROCESSING and len(text_segments) > 1:
+    if batch_processing_enabled and len(text_segments) > 1:
         # BATCH PROCESSING MODE - Higher GPU Utilization
         for batch_start in range(0, len(text_segments), MAX_BATCH_SIZE):
             batch_end = min(batch_start + MAX_BATCH_SIZE, len(text_segments))
@@ -628,17 +634,24 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                     batch_results = []
                     
                     # Create multiple CUDA streams for concurrent execution
-                    streams = [torch.cuda.Stream() for _ in range(len(batch))]
-                    
-                    # Launch parallel generations
-                    for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
-                        with torch.cuda.stream(streams[i]):
+                    if torch.cuda.is_available():
+                        streams = [torch.cuda.Stream() for _ in range(min(len(batch), 4))]  # Limit streams
+                        
+                        # Launch parallel generations
+                        for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                            stream_idx = i % len(streams)  # Cycle through available streams
+                            with torch.cuda.stream(streams[stream_idx]):
+                                result = tts_model.generate([entries], [attributes])
+                                batch_results.append((batch_indices[i], result))
+                        
+                        # Synchronize all streams
+                        for stream in streams:
+                            stream.synchronize()
+                    else:
+                        # CPU fallback
+                        for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
                             result = tts_model.generate([entries], [attributes])
                             batch_results.append((batch_indices[i], result))
-                    
-                    # Synchronize all streams
-                    for stream in streams:
-                        stream.synchronize()
                     
                     logger.info(f"✅ Batch completed with {len(batch_results)} parallel generations")
                     
@@ -667,10 +680,10 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 logger.error(f"Batch processing failed: {batch_error}")
                 # Fallback to sequential processing
                 logger.info("🔄 Falling back to sequential processing")
-                ENABLE_BATCH_PROCESSING = False
+                batch_processing_enabled = False
     
     # Sequential fallback or single segment
-    if not ENABLE_BATCH_PROCESSING or len(text_segments) == 1:
+    if not batch_processing_enabled or len(text_segments) <= 1:
         logger.info("📝 Using sequential processing")
         for idx, voice, content in text_segments:
             segment_start = time.time()
@@ -741,41 +754,64 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
             logger.info("🧹 Applying CONCURRENT GPU-accelerated cleaning...")
             
             # Split audio into chunks for concurrent processing
-            chunk_size = len(final_audio) // 4  # 4 concurrent chunks
-            chunks = [final_audio[i:i+chunk_size] for i in range(0, len(final_audio), chunk_size)]
-            
-            # Process chunks concurrently
-            cleaned_chunks = []
-            streams = [torch.cuda.Stream() for _ in range(len(chunks))]
-            
-            for i, chunk in enumerate(chunks):
-                with torch.cuda.stream(streams[i]):
-                    cleaned_chunk = clean_audio_segment_gpu(
-                        chunk,
-                        volume_boost=volume_boost,
-                        remove_crackles=remove_crackles,
-                        apply_filters=apply_filters,
-                        reduce_noise=reduce_noise
-                    )
-                    cleaned_chunks.append(cleaned_chunk)
-            
-            # Synchronize and combine
-            for stream in streams:
-                stream.synchronize()
-            
-            # Combine cleaned chunks
-            final_audio = sum(cleaned_chunks)
+            audio_duration = len(final_audio)
+            if audio_duration > 4000:  # Only split if audio is longer than 4 seconds
+                chunk_size = audio_duration // 4  # 4 concurrent chunks
+                chunks = [final_audio[i:i+chunk_size] for i in range(0, audio_duration, chunk_size)]
+                
+                # Process chunks concurrently
+                cleaned_chunks = []
+                
+                if torch.cuda.is_available():
+                    streams = [torch.cuda.Stream() for _ in range(min(len(chunks), 4))]
+                    
+                    for i, chunk in enumerate(chunks):
+                        stream_idx = i % len(streams)
+                        with torch.cuda.stream(streams[stream_idx]):
+                            cleaned_chunk = clean_audio_segment_gpu(
+                                chunk,
+                                volume_boost=volume_boost,
+                                remove_crackles=remove_crackles,
+                                apply_filters=apply_filters,
+                                reduce_noise=reduce_noise
+                            )
+                            cleaned_chunks.append(cleaned_chunk)
+                    
+                    # Synchronize and combine
+                    for stream in streams:
+                        stream.synchronize()
+                else:
+                    # CPU fallback
+                    for chunk in chunks:
+                        cleaned_chunk = clean_audio_segment_gpu(
+                            chunk, volume_boost, remove_crackles, apply_filters, reduce_noise
+                        )
+                        cleaned_chunks.append(cleaned_chunk)
+                
+                # Combine cleaned chunks
+                final_audio = sum(cleaned_chunks)
+            else:
+                # Audio too short for chunking, use standard cleaning
+                final_audio = clean_audio_segment_gpu(
+                    final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise
+                )
             
             cleaning_time = time.time() - cleaning_start
             logger.info(f"✅ CONCURRENT audio cleaning completed in {cleaning_time:.2f}s")
         except Exception as cleaning_error:
             logger.warning(f"Concurrent GPU cleaning failed, using standard cleaning: {cleaning_error}")
             # Fallback to standard cleaning
-            final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
+            try:
+                final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
+            except Exception as fallback_error:
+                logger.warning(f"Standard cleaning also failed: {fallback_error}")
     elif apply_cleaning:
         # Standard GPU cleaning
-        logger.info("🧹 Applying standard GPU cleaning...")
-        final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
+        try:
+            logger.info("🧹 Applying standard GPU cleaning...")
+            final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
+        except Exception as cleaning_error:
+            logger.warning(f"GPU cleaning failed: {cleaning_error}")
     
     # Export
     export_start = time.time()
