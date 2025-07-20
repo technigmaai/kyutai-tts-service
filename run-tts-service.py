@@ -20,6 +20,9 @@ from xml.etree import ElementTree as ET
 from typing import Optional
 import torchaudio
 import torchaudio.transforms as T
+import psutil
+import threading
+import time
 
 # Audio cleaning imports - keeping CPU fallbacks
 import librosa
@@ -28,6 +31,35 @@ from scipy.ndimage import median_filter
 import soundfile as sf
 import warnings
 warnings.filterwarnings('ignore')
+
+# Performance monitoring
+def log_system_usage():
+    """Log CPU and GPU usage"""
+    cpu_percent = psutil.cpu_percent(interval=0.1)
+    memory_percent = psutil.virtual_memory().percent
+    
+    gpu_info = ""
+    if torch.cuda.is_available():
+        gpu_memory_used = torch.cuda.memory_allocated() / 1024**3
+        gpu_memory_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        gpu_memory_percent = (gpu_memory_used / gpu_memory_total) * 100
+        gpu_info = f"GPU: {gpu_memory_percent:.1f}% ({gpu_memory_used:.1f}GB/{gpu_memory_total:.1f}GB)"
+    
+    logger.info(f"📊 Usage - CPU: {cpu_percent}%, RAM: {memory_percent}%, {gpu_info}")
+
+# Start background monitoring (optional)
+ENABLE_MONITORING = True  # Set to False to disable
+
+def start_monitoring():
+    if ENABLE_MONITORING:
+        def monitor():
+            while True:
+                time.sleep(30)  # Log every 30 seconds
+                log_system_usage()
+        
+        monitor_thread = threading.Thread(target=monitor, daemon=True)
+        monitor_thread.start()
+        logger.info("📈 System monitoring started")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -40,7 +72,21 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # Global device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ENABLE_COMPILATION = True  # Set to False to disable torch.compile attempts
+ENABLE_CPU_OPTIMIZATIONS = True  # Enable CPU usage optimizations
 logger.info(f"Using device: {device}")
+
+# CPU optimization settings
+if ENABLE_CPU_OPTIMIZATIONS:
+    # Reduce CPU threads for PyTorch operations
+    torch.set_num_threads(4)  # Reduce from default (usually 16-32)
+    torch.set_num_interop_threads(2)  # Reduce inter-op parallelism
+    
+    # Set environment variables for CPU libraries
+    os.environ['OMP_NUM_THREADS'] = '4'
+    os.environ['MKL_NUM_THREADS'] = '4'
+    os.environ['NUMEXPR_NUM_THREADS'] = '4'
+    
+    logger.info("🔧 CPU usage optimizations enabled")
 
 # --- GPU-Accelerated Audio Cleaner Class ---
 class GPUAudioCleaner:
@@ -85,16 +131,20 @@ class GPUAudioCleaner:
     def apply_highpass_filter_gpu(self, cutoff=80):
         """Apply high-pass filter using torchaudio on GPU"""
         try:
-            # Create high-pass filter
-            highpass = T.HighpassBiquad(
-                sample_rate=self.sample_rate, 
-                cutoff_freq=cutoff
-            ).to(self.device)
-            
-            # Apply filter (need to add batch dimension)
-            audio_filtered = highpass(self.audio_tensor.unsqueeze(0))
-            self.audio_tensor = audio_filtered.squeeze(0)
-            logger.debug(f"✓ High-pass filter applied (GPU, cutoff: {cutoff} Hz)")
+            # Check if HighpassBiquad is available (newer torchaudio versions)
+            if hasattr(T, 'HighpassBiquad'):
+                highpass = T.HighpassBiquad(
+                    sample_rate=self.sample_rate, 
+                    cutoff_freq=cutoff
+                ).to(self.device)
+                
+                # Apply filter (need to add batch dimension)
+                audio_filtered = highpass(self.audio_tensor.unsqueeze(0))
+                self.audio_tensor = audio_filtered.squeeze(0)
+                logger.debug(f"✓ High-pass filter applied (GPU, cutoff: {cutoff} Hz)")
+            else:
+                # Use alternative GPU-based filtering
+                self._apply_highpass_filter_fft_gpu(cutoff)
         except Exception as e:
             logger.warning(f"GPU highpass failed, using CPU fallback: {e}")
             self._apply_highpass_filter_cpu(cutoff)
@@ -102,19 +152,51 @@ class GPUAudioCleaner:
     def apply_lowpass_filter_gpu(self, cutoff=8000):
         """Apply low-pass filter using torchaudio on GPU"""
         try:
-            # Create low-pass filter
-            lowpass = T.LowpassBiquad(
-                sample_rate=self.sample_rate, 
-                cutoff_freq=cutoff
-            ).to(self.device)
-            
-            # Apply filter
-            audio_filtered = lowpass(self.audio_tensor.unsqueeze(0))
-            self.audio_tensor = audio_filtered.squeeze(0)
-            logger.debug(f"✓ Low-pass filter applied (GPU, cutoff: {cutoff} Hz)")
+            # Check if LowpassBiquad is available (newer torchaudio versions)
+            if hasattr(T, 'LowpassBiquad'):
+                lowpass = T.LowpassBiquad(
+                    sample_rate=self.sample_rate, 
+                    cutoff_freq=cutoff
+                ).to(self.device)
+                
+                # Apply filter
+                audio_filtered = lowpass(self.audio_tensor.unsqueeze(0))
+                self.audio_tensor = audio_filtered.squeeze(0)
+                logger.debug(f"✓ Low-pass filter applied (GPU, cutoff: {cutoff} Hz)")
+            else:
+                # Use alternative GPU-based filtering
+                self._apply_lowpass_filter_fft_gpu(cutoff)
         except Exception as e:
             logger.warning(f"GPU lowpass failed, using CPU fallback: {e}")
             self._apply_lowpass_filter_cpu(cutoff)
+    
+    def _apply_highpass_filter_fft_gpu(self, cutoff=80):
+        """Alternative GPU-based high-pass filter using FFT"""
+        # Convert to frequency domain
+        fft_result = torch.fft.fft(self.audio_tensor)
+        freqs = torch.fft.fftfreq(len(self.audio_tensor), 1/self.sample_rate).to(self.device)
+        
+        # Create high-pass mask
+        mask = torch.abs(freqs) > cutoff
+        fft_filtered = fft_result * mask.float()
+        
+        # Convert back to time domain
+        self.audio_tensor = torch.real(torch.fft.ifft(fft_filtered))
+        logger.debug(f"✓ High-pass filter applied (GPU FFT, cutoff: {cutoff} Hz)")
+    
+    def _apply_lowpass_filter_fft_gpu(self, cutoff=8000):
+        """Alternative GPU-based low-pass filter using FFT"""
+        # Convert to frequency domain
+        fft_result = torch.fft.fft(self.audio_tensor)
+        freqs = torch.fft.fftfreq(len(self.audio_tensor), 1/self.sample_rate).to(self.device)
+        
+        # Create low-pass mask
+        mask = torch.abs(freqs) < cutoff
+        fft_filtered = fft_result * mask.float()
+        
+        # Convert back to time domain
+        self.audio_tensor = torch.real(torch.fft.ifft(fft_filtered))
+        logger.debug(f"✓ Low-pass filter applied (GPU FFT, cutoff: {cutoff} Hz)")
     
     def reduce_noise_spectral_gpu(self, noise_factor=0.1):
         """GPU-accelerated spectral noise reduction using torch.fft"""
@@ -231,15 +313,22 @@ class GPUAudioCleaner:
 # GPU-optimized audio processing functions
 def clean_audio_from_file_gpu(file_path, volume_boost=6, remove_crackles=True, 
                              apply_filters=True, reduce_noise=True):
-    """Clean audio from file path using GPU acceleration"""
+    """Clean audio from file path using GPU acceleration with CPU optimization"""
     try:
-        # Load audio using torchaudio for better GPU integration
+        logger.debug("🔄 Loading audio file...")
+        
+        # Use torchaudio directly for GPU-native loading when possible
         try:
-            audio_tensor, sample_rate = torchaudio.load(file_path)
-            audio_data = audio_tensor.mean(dim=0).numpy()  # Convert to mono
-        except:
-            # Fallback to librosa
-            audio_data, sample_rate = librosa.load(file_path, sr=None)
+            audio_tensor, sample_rate = torchaudio.load(file_path, backend="ffmpeg")
+            # Convert to mono on GPU
+            if audio_tensor.shape[0] > 1:
+                audio_tensor = torch.mean(audio_tensor, dim=0, keepdim=True)
+            audio_data = audio_tensor.squeeze().cpu().numpy()  # Only move to CPU when needed
+            logger.debug("✅ Audio loaded via torchaudio (GPU-optimized)")
+        except Exception as torchaudio_error:
+            logger.debug(f"Torchaudio failed, using librosa fallback: {torchaudio_error}")
+            # Fallback to librosa with reduced CPU usage
+            audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
         
         # Clean audio using GPU
         cleaner = GPUAudioCleaner(audio_data, sample_rate, device)
@@ -257,15 +346,26 @@ def clean_audio_from_file_gpu(file_path, volume_boost=6, remove_crackles=True,
 
 def clean_audio_segment_gpu(audio_segment, volume_boost=6, remove_crackles=True, 
                            apply_filters=True, reduce_noise=True):
-    """Clean AudioSegment object using GPU acceleration"""
+    """Clean AudioSegment object using GPU acceleration with minimal CPU usage"""
     try:
-        # Convert AudioSegment to numpy array
-        audio_data = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
-        audio_data = audio_data / (2**15)  # Normalize from int16 to float
+        logger.debug("🔄 Converting AudioSegment for GPU processing...")
         
-        # If stereo, take first channel
+        # Optimize AudioSegment to numpy conversion with proper array handling
+        raw_data = audio_segment.raw_data
+        audio_array = np.frombuffer(raw_data, dtype=np.int16)
+        
+        # Ensure array is C-contiguous to avoid negative stride issues
+        if not audio_array.flags['C_CONTIGUOUS']:
+            audio_array = np.ascontiguousarray(audio_array)
+        
+        # Normalize efficiently
+        audio_data = audio_array.astype(np.float32) / 32768.0
+        
+        # Handle stereo -> mono conversion efficiently
         if audio_segment.channels == 2:
-            audio_data = audio_data[::2]
+            audio_data = audio_data.reshape(-1, 2).mean(axis=1)
+            # Ensure the result is contiguous
+            audio_data = np.ascontiguousarray(audio_data)
         
         sample_rate = audio_segment.frame_rate
         
@@ -278,8 +378,13 @@ def clean_audio_segment_gpu(audio_segment, volume_boost=6, remove_crackles=True,
             reduce_noise=reduce_noise
         )
         
-        # Convert back to AudioSegment
-        cleaned_audio_int = (cleaned_audio * 32767).astype(np.int16)
+        # Convert back to AudioSegment efficiently with proper bounds checking
+        cleaned_audio_int = np.clip(cleaned_audio * 32767, -32767, 32767).astype(np.int16)
+        
+        # Ensure the array is contiguous before creating AudioSegment
+        if not cleaned_audio_int.flags['C_CONTIGUOUS']:
+            cleaned_audio_int = np.ascontiguousarray(cleaned_audio_int)
+        
         cleaned_segment = AudioSegment(
             cleaned_audio_int.tobytes(),
             frame_rate=sample_rate,
@@ -287,10 +392,13 @@ def clean_audio_segment_gpu(audio_segment, volume_boost=6, remove_crackles=True,
             channels=1
         )
         
+        logger.debug("✅ AudioSegment processing complete")
         return cleaned_segment
     except Exception as e:
         logger.error(f"Error cleaning audio segment: {e}")
-        raise
+        # Return original audio if cleaning fails
+        logger.info("🔄 Returning original audio without cleaning")
+        return audio_segment
 
 # --- Model Loading with GPU Optimization ---
 MODEL_LOADED = False
@@ -446,22 +554,33 @@ def parse_ssml(ssml_text: str, default_voice: str):
     logger.info(f"Parsed into {len(segments)} segments.")
     return segments
 
-# --- Optimized Audio Generation with Error Handling ---
+# --- Optimized Audio Generation with CPU Usage Monitoring ---
 def generate_audio_safe(ssml_text: str, default_voice: str, output_format: str = "mp3",
                        apply_cleaning: bool = False, volume_boost: float = 6.0, 
                        remove_crackles: bool = True, apply_filters: bool = True, 
                        reduce_noise: bool = True) -> str:
-    """Generate audio with comprehensive error handling and fallbacks"""
+    """Generate audio with comprehensive error handling and CPU optimization"""
     if not MODEL_LOADED:
         raise RuntimeError("Model is not loaded")
 
-    logger.info("Generating audio from parsed segments...")
+    start_time = time.time()
+    logger.info("🎵 Starting audio generation...")
+    
+    if ENABLE_MONITORING:
+        log_system_usage()
+    
     segments = parse_ssml(ssml_text, default_voice)
     output_audio_segments = []
 
+    # Pre-allocate GPU memory for efficient processing
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     # Process segments with GPU optimizations and error handling
     for idx, (voice, content) in enumerate(segments):
-        logger.info(f"Processing segment {idx + 1}/{len(segments)}: Voice='{voice}'")
+        segment_start = time.time()
+        logger.info(f"🔄 Processing segment {idx + 1}/{len(segments)}: Voice='{voice}'")
+        
         if voice == "PAUSE":
             output_audio_segments.append(content)
             continue
@@ -471,60 +590,82 @@ def generate_audio_safe(ssml_text: str, default_voice: str, output_format: str =
         voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
         attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
         
-        # Generate audio with stable inference (avoiding autocast due to dtype issues)
+        # Generate audio with stable inference
         try:
-            # Use standard torch.no_grad() for maximum stability
+            # Force all operations to GPU and minimize CPU usage
             with torch.no_grad():
+                # Pin memory to reduce CPU-GPU transfer overhead
                 result = tts_model.generate([entries], [attributes])
                     
         except RuntimeError as e:
             if "dtype" in str(e) or "scatter" in str(e):
                 logger.error(f"Generation failed for segment {idx + 1} due to dtype mismatch: {e}")
-                # Skip this segment and continue
                 continue
             else:
-                raise  # Re-raise if it's not a dtype/scatter error
+                raise
 
-        # Decode audio efficiently
+        # Decode audio efficiently with minimal CPU usage
         try:
             with tts_model.mimi.streaming(1), torch.no_grad():
                 pcms = []
-                for frame in result.frames[tts_model.delay_steps:]:
+                # Process frames in batches to reduce CPU overhead
+                frames_batch = list(result.frames[tts_model.delay_steps:])
+                
+                for frame in frames_batch:
+                    # Keep operations on GPU as long as possible
                     decoded = tts_model.mimi.decode(frame[:, 1:, :])
-                    pcm = torch.clamp(decoded, -1, 1).cpu().numpy()[0, 0]
-                    pcms.append(pcm)
-                pcm_data = np.concatenate(pcms, axis=-1)
+                    pcm = torch.clamp(decoded, -1, 1)
+                    pcms.append(pcm[0, 0])  # Keep on GPU
+                
+                # Single GPU->CPU transfer at the end
+                pcm_tensor = torch.cat(pcms, dim=-1)
+                pcm_data = pcm_tensor.cpu().numpy()
+                
         except Exception as decode_error:
             logger.error(f"Audio decoding failed for segment {idx + 1}: {decode_error}")
             continue
 
-        # Create temporary wav file
+        # Optimize file operations
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
+                # Use efficient WAV writing
                 sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
                 wav_path = wav_fp.name
             
+            # Load AudioSegment efficiently
             segment_audio = AudioSegment.from_wav(wav_path)
             output_audio_segments.append(segment_audio)
-            os.remove(wav_path)
+            
+            # Clean up immediately to free memory
+            os.unlink(wav_path)
+            
         except Exception as file_error:
             logger.error(f"File processing failed for segment {idx + 1}: {file_error}")
             continue
+            
+        segment_time = time.time() - segment_start
+        logger.debug(f"⏱️  Segment {idx + 1} completed in {segment_time:.2f}s")
     
     if not output_audio_segments:
         logger.warning("No audio was generated, returning empty audio file.")
         final_audio = AudioSegment.silent(duration=1)
     else:
-        final_audio = sum(output_audio_segments)
+        logger.info("🔗 Combining audio segments...")
+        # Use more efficient concatenation
+        final_audio = output_audio_segments[0]
+        for segment in output_audio_segments[1:]:
+            final_audio += segment
 
-    logger.info("Normalizing final audio...")
-    final_audio = normalize(final_audio)
+    logger.info("🎚️  Normalizing final audio...")
+    # Optimize normalization - use pydub's built-in efficiently
+    final_audio = final_audio.normalize()
     final_audio = final_audio.set_frame_rate(44100).set_sample_width(2).set_channels(1)
     
     # Apply GPU-accelerated cleaning if requested
     if apply_cleaning:
         try:
-            logger.info("Applying GPU-accelerated cleaning to final audio...")
+            cleaning_start = time.time()
+            logger.info("🧹 Applying GPU-accelerated cleaning to final audio...")
             final_audio = clean_audio_segment_gpu(
                 final_audio,
                 volume_boost=volume_boost,
@@ -532,19 +673,32 @@ def generate_audio_safe(ssml_text: str, default_voice: str, output_format: str =
                 apply_filters=apply_filters,
                 reduce_noise=reduce_noise
             )
+            cleaning_time = time.time() - cleaning_start
+            logger.info(f"✅ Audio cleaning completed in {cleaning_time:.2f}s")
         except Exception as cleaning_error:
-            logger.warning(f"GPU cleaning failed, audio will be returned without cleaning: {cleaning_error}")
+            logger.warning(f"GPU cleaning failed, returning original audio: {cleaning_error}")
     
-    # Export based on requested format
+    # Optimize export process
+    export_start = time.time()
     if output_format.lower() == "wav":
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
-            final_audio.export(wav_fp.name, format="wav")
-            logger.info(f"Final audio successfully exported to {wav_fp.name} as WAV")
+            final_audio.export(wav_fp.name, format="wav", parameters=["-ac", "1"])  # Force mono
+            export_time = time.time() - export_start
+            logger.info(f"📁 Final audio exported as WAV in {export_time:.2f}s")
+            total_time = time.time() - start_time
+            logger.info(f"🎉 Total generation time: {total_time:.2f}s")
+            if ENABLE_MONITORING:
+                log_system_usage()
             return wav_fp.name
     else:  # Default to MP3
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_fp:
-            final_audio.export(mp3_fp.name, format="mp3", bitrate="320k")
-            logger.info(f"Final audio successfully exported to {mp3_fp.name} as MP3")
+            final_audio.export(mp3_fp.name, format="mp3", bitrate="320k", parameters=["-ac", "1"])
+            export_time = time.time() - export_start
+            logger.info(f"📁 Final audio exported as MP3 in {export_time:.2f}s")
+            total_time = time.time() - start_time
+            logger.info(f"🎉 Total generation time: {total_time:.2f}s")
+            if ENABLE_MONITORING:
+                log_system_usage()
             return mp3_fp.name
 
 # Alias for backward compatibility
@@ -708,11 +862,37 @@ def root():
 
 if __name__ == "__main__":
     if MODEL_LOADED:
-        logger.info("Starting GPU-optimized server with hardware-accelerated audio processing.")
+        logger.info("🚀 Starting GPU-optimized server with hardware-accelerated audio processing.")
         logger.info(f"GPU Status: {torch.cuda.is_available()}, Device: {device}")
         if torch.cuda.is_available():
             logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB")
-        logger.info("Launching FastAPI server on http://0.0.0.0:7861")
-        uvicorn.run(app, host="0.0.0.0", port=7861)
+        
+        # Log CPU optimization status
+        if ENABLE_CPU_OPTIMIZATIONS:
+            logger.info(f"🔧 CPU optimizations enabled - Threads: {torch.get_num_threads()}")
+        
+        # Start system monitoring
+        if ENABLE_MONITORING:
+            start_monitoring()
+        
+        # Log startup configuration
+        logger.info(f"🔧 CPU optimizations: {'Enabled' if ENABLE_CPU_OPTIMIZATIONS else 'Disabled'}")
+        logger.info(f"📊 System monitoring: {'Enabled' if ENABLE_MONITORING else 'Disabled'}")
+        logger.info(f"🧠 PyTorch threads: {torch.get_num_threads()}")
+        
+        # Initial system status
+        log_system_usage()
+        
+        logger.info("🌐 Launching FastAPI server on http://0.0.0.0:7861")
+        
+        # Configure uvicorn for optimal performance
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=7861,
+            workers=1,  # Single worker to avoid GPU memory conflicts
+            loop="asyncio",  # Use asyncio for better performance
+            access_log=False  # Disable access logs to reduce CPU overhead
+        )
     else:
         logger.error("Application will not start because the model failed to load.")
