@@ -32,9 +32,174 @@ import soundfile as sf
 import warnings
 warnings.filterwarnings('ignore')
 
+# Setup logging first (before memory pool)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+# --- Sophisticated GPU Memory Pooling System ---
+class GPUMemoryPool:
+    """Advanced GPU memory pooling system for efficient memory management"""
+    
+    def __init__(self, device=None, max_memory_fraction=0.85):
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.max_memory_fraction = max_memory_fraction
+        self.pools = {}  # Size -> list of tensors
+        self.allocated_tensors = {}  # id(tensor) -> size
+        self.total_allocated = 0
+        self.max_allocated = 0
+        self.cleanup_threshold = 0.7  # Cleanup when 70% of max memory is used
+        self.pool_sizes = [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
+        
+        if torch.cuda.is_available():
+            self.total_gpu_memory = torch.cuda.get_device_properties(0).total_memory
+            self.max_allocated_memory = int(self.total_gpu_memory * max_memory_fraction)
+            logger.info(f"🧠 GPU Memory Pool initialized - Max: {self.max_allocated_memory / 1024**3:.2f}GB")
+        else:
+            self.total_gpu_memory = 0
+            self.max_allocated_memory = 0
+            logger.info("🧠 GPU Memory Pool initialized (CPU mode)")
+    
+    def get_nearest_pool_size(self, size):
+        """Find the nearest pool size for efficient allocation"""
+        for pool_size in self.pool_sizes:
+            if pool_size >= size:
+                return pool_size
+        return size  # If larger than any pool, allocate exact size
+    
+    def allocate(self, size, dtype=torch.float32, device=None):
+        """Allocate tensor from pool or create new one"""
+        if device is None:
+            device = self.device
+            
+        if not torch.cuda.is_available() or device.type == 'cpu':
+            # CPU fallback
+            return torch.empty(size, dtype=dtype, device=device)
+        
+        # Check if we need cleanup
+        if self.total_allocated > self.max_allocated_memory * self.cleanup_threshold:
+            self.cleanup()
+        
+        # Find appropriate pool size
+        pool_size = self.get_nearest_pool_size(size)
+        
+        # Try to get from pool
+        if pool_size in self.pools and self.pools[pool_size]:
+            tensor = self.pools[pool_size].pop()
+            # Resize if needed
+            if tensor.numel() >= size:
+                tensor = tensor[:size] if len(tensor.shape) == 1 else tensor[:size, ...]
+            else:
+                # Pool tensor too small, create new one
+                tensor = torch.empty(size, dtype=dtype, device=device)
+        else:
+            # Create new tensor
+            tensor = torch.empty(size, dtype=dtype, device=device)
+        
+        # Track allocation
+        tensor_id = id(tensor)
+        self.allocated_tensors[tensor_id] = size
+        self.total_allocated += size * tensor.element_size()
+        self.max_allocated = max(self.max_allocated, self.total_allocated)
+        
+        return tensor
+    
+    def free(self, tensor):
+        """Return tensor to pool for reuse"""
+        if not torch.cuda.is_available() or tensor.device.type == 'cpu':
+            return
+        
+        tensor_id = id(tensor)
+        if tensor_id in self.allocated_tensors:
+            size = self.allocated_tensors.pop(tensor_id)
+            self.total_allocated -= size * tensor.element_size()
+            
+            # Clear tensor data and add to pool
+            tensor.zero_()
+            pool_size = self.get_nearest_pool_size(size)
+            
+            if pool_size not in self.pools:
+                self.pools[pool_size] = []
+            
+            # Limit pool size to prevent memory bloat
+            if len(self.pools[pool_size]) < 10:
+                self.pools[pool_size].append(tensor)
+    
+    def cleanup(self, force=False):
+        """Clean up pools and free memory"""
+        if not torch.cuda.is_available():
+            return
+        
+        # Clear all pools
+        for pool_size in self.pools:
+            self.pools[pool_size].clear()
+        
+        # Force garbage collection
+        if force:
+            torch.cuda.empty_cache()
+        
+        logger.debug(f"🧹 GPU Memory Pool cleaned - Allocated: {self.total_allocated / 1024**3:.2f}GB")
+    
+    def get_memory_stats(self):
+        """Get detailed memory statistics"""
+        if not torch.cuda.is_available():
+            return {
+                "device": "cpu",
+                "total_allocated": 0,
+                "max_allocated": 0,
+                "pool_count": 0
+            }
+        
+        pool_count = sum(len(tensors) for tensors in self.pools.values())
+        return {
+            "device": str(self.device),
+            "total_allocated_gb": self.total_allocated / 1024**3,
+            "max_allocated_gb": self.max_allocated / 1024**3,
+            "max_memory_gb": self.max_allocated_memory / 1024**3,
+            "utilization_percent": (self.total_allocated / self.max_allocated_memory) * 100,
+            "pool_count": pool_count,
+            "active_tensors": len(self.allocated_tensors)
+        }
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup(force=True)
+
+# Global memory pool instance
+gpu_memory_pool = GPUMemoryPool() if torch.cuda.is_available() else None
+
+# Memory pool context manager
+class MemoryPoolContext:
+    """Context manager for GPU memory pool operations"""
+    
+    def __init__(self, pool=None):
+        self.pool = pool or gpu_memory_pool
+    
+    def __enter__(self):
+        return self.pool
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.pool:
+            self.pool.cleanup()
+
+# Enhanced memory allocation functions
+def allocate_gpu_tensor(size, dtype=torch.float32, device=None):
+    """Allocate tensor using memory pool"""
+    if gpu_memory_pool:
+        return gpu_memory_pool.allocate(size, dtype, device)
+    else:
+        device = device or torch.device("cpu")
+        return torch.empty(size, dtype=dtype, device=device)
+
+def free_gpu_tensor(tensor):
+    """Free tensor back to memory pool"""
+    if gpu_memory_pool and tensor.device.type == 'cuda':
+        gpu_memory_pool.free(tensor)
+
 # Performance monitoring
 def log_system_usage():
-    """Log CPU and GPU usage"""
+    """Log CPU and GPU usage with memory pool statistics"""
     cpu_percent = psutil.cpu_percent(interval=0.1)
     memory_percent = psutil.virtual_memory().percent
     
@@ -44,6 +209,12 @@ def log_system_usage():
         gpu_memory_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
         gpu_memory_percent = (gpu_memory_used / gpu_memory_total) * 100
         gpu_info = f"GPU: {gpu_memory_percent:.1f}% ({gpu_memory_used:.1f}GB/{gpu_memory_total:.1f}GB)"
+        
+        # Add memory pool statistics
+        if gpu_memory_pool:
+            pool_stats = gpu_memory_pool.get_memory_stats()
+            pool_info = f" | Pool: {pool_stats['total_allocated_gb']:.2f}GB/{pool_stats['max_memory_gb']:.2f}GB ({pool_stats['utilization_percent']:.1f}%) | Tensors: {pool_stats['active_tensors']}"
+            gpu_info += pool_info
     
     logger.info(f"📊 Usage - CPU: {cpu_percent}%, RAM: {memory_percent}%, {gpu_info}")
 
@@ -53,17 +224,21 @@ ENABLE_MONITORING = True  # Set to False to disable
 def start_monitoring():
     if ENABLE_MONITORING:
         def monitor():
+            cleanup_counter = 0
             while True:
                 time.sleep(30)  # Log every 30 seconds
                 log_system_usage()
+                
+                # Periodic memory pool cleanup (every 10 minutes)
+                cleanup_counter += 1
+                if cleanup_counter >= 20 and gpu_memory_pool:  # 20 * 30s = 10 minutes
+                    gpu_memory_pool.cleanup()
+                    cleanup_counter = 0
+                    logger.info("🧹 Periodic GPU memory pool cleanup completed")
         
         monitor_thread = threading.Thread(target=monitor, daemon=True)
         monitor_thread.start()
-        logger.info("📈 System monitoring started")
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+        logger.info("📈 System monitoring started with periodic memory cleanup")
 
 # FastAPI setup
 app = FastAPI(title="GPU-Optimized Kyutai TTS API", description="Generate and clean speech audio with GPU acceleration.", version="3.0.0")
@@ -96,11 +271,22 @@ class GPUAudioCleaner:
     def __init__(self, audio_data, sample_rate, device=None):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Convert to torch tensor and move to GPU
+        # Convert to torch tensor and move to GPU using memory pool
         if isinstance(audio_data, np.ndarray):
-            self.audio_tensor = torch.from_numpy(audio_data).float().to(self.device)
+            # Use memory pool for allocation
+            if gpu_memory_pool and self.device.type == 'cuda':
+                size = audio_data.size
+                self.audio_tensor = allocate_gpu_tensor(size, torch.float32, self.device)
+                self.audio_tensor.copy_(torch.from_numpy(audio_data).float())
+            else:
+                self.audio_tensor = torch.from_numpy(audio_data).float().to(self.device)
         else:
-            self.audio_tensor = audio_data.float().to(self.device)
+            if gpu_memory_pool and self.device.type == 'cuda':
+                size = audio_data.numel()
+                self.audio_tensor = allocate_gpu_tensor(size, audio_data.dtype, self.device)
+                self.audio_tensor.copy_(audio_data.float())
+            else:
+                self.audio_tensor = audio_data.float().to(self.device)
             
         self.sample_rate = sample_rate
         self.original_shape = self.audio_tensor.shape
@@ -288,7 +474,18 @@ class GPUAudioCleaner:
             self.boost_volume_gpu(volume_boost_db)
         
         logger.info("GPU audio cleaning complete!")
-        return self.audio_tensor.cpu().numpy()  # Return to CPU for final export
+        result = self.audio_tensor.cpu().numpy()  # Return to CPU for final export
+        
+        # Clean up GPU memory
+        if gpu_memory_pool:
+            free_gpu_tensor(self.audio_tensor)
+        
+        return result
+    
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        if hasattr(self, 'audio_tensor') and gpu_memory_pool:
+            free_gpu_tensor(self.audio_tensor)
     
     # CPU fallback methods
     def _apply_highpass_filter_cpu(self, cutoff=80):
@@ -431,12 +628,23 @@ try:
         torch.backends.cudnn.benchmark = False  # More conservative for variable input sizes
         torch.backends.cudnn.deterministic = True
         
-        # Optional: Pre-allocate memory for better performance
+        # Initialize memory pool and pre-allocate memory for better performance
         try:
             torch.cuda.empty_cache()
-            # Reserve 90% of GPU memory for this process
-            torch.cuda.set_per_process_memory_fraction(0.9)
-            logger.info("🚀 GPU memory pre-allocated for optimal performance")
+            # Reserve 85% of GPU memory for this process (more conservative)
+            torch.cuda.set_per_process_memory_fraction(0.85)
+            
+            # Pre-allocate some common tensor sizes in the memory pool
+            if gpu_memory_pool:
+                common_sizes = [1024, 4096, 16384, 65536, 262144, 1048576]
+                for size in common_sizes:
+                    for _ in range(5):  # Pre-allocate 5 tensors of each size
+                        dummy_tensor = allocate_gpu_tensor(size, torch.float32, device)
+                        free_gpu_tensor(dummy_tensor)
+                
+                logger.info("🚀 GPU memory pool pre-allocated for optimal performance")
+            else:
+                logger.info("🚀 GPU memory pre-allocated for optimal performance")
         except Exception as mem_error:
             logger.warning(f"GPU memory pre-allocation failed: {mem_error}")
         
@@ -571,270 +779,279 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
     start_time = time.time()
     logger.info("🎵 Starting HIGH GPU UTILIZATION audio generation...")
     
-    if ENABLE_MONITORING:
-        log_system_usage()
-    
-    segments = parse_ssml(ssml_text, default_voice)
-    
-    # Separate text segments from pause segments
-    text_segments = []
-    pause_segments = []
-    segment_map = []  # Track original order
-    
-    for idx, (voice, content) in enumerate(segments):
-        if voice == "PAUSE":
-            pause_segments.append((idx, content))
-            segment_map.append(("PAUSE", len(pause_segments) - 1))
-        else:
-            text_segments.append((idx, voice, content))
-            segment_map.append(("TEXT", len(text_segments) - 1))
-    
-    # Pre-allocate GPU memory for batch processing
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        # Pre-allocate larger memory chunks for batch processing
-        try:
-            dummy_tensor = torch.zeros(MAX_BATCH_SIZE, 1024, device=device)
-            del dummy_tensor
-        except:
-            pass  # Continue if allocation fails
-    
-    logger.info(f"🚀 Processing {len(text_segments)} text segments in batches of {MAX_BATCH_SIZE}")
-    
-    # Process text segments in batches for higher GPU utilization
-    text_audio_results = {}
-    batch_processing_enabled = ENABLE_BATCH_PROCESSING  # Local copy to avoid scoping issues
-    
-    if batch_processing_enabled and len(text_segments) > 1:
-        # BATCH PROCESSING MODE - Higher GPU Utilization
-        for batch_start in range(0, len(text_segments), MAX_BATCH_SIZE):
-            batch_end = min(batch_start + MAX_BATCH_SIZE, len(text_segments))
-            batch = text_segments[batch_start:batch_end]
-            
-            logger.info(f"🔥 Processing batch {batch_start//MAX_BATCH_SIZE + 1} with {len(batch)} segments (GPU INTENSIVE)")
-            
-            # Prepare all batch data
-            batch_entries = []
-            batch_attributes = []
-            batch_indices = []
-            
-            for idx, voice, content in batch:
+    # Use memory pool context for automatic cleanup
+    with MemoryPoolContext() as memory_pool:
+        
+        if ENABLE_MONITORING:
+            log_system_usage()
+        
+        segments = parse_ssml(ssml_text, default_voice)
+        
+        # Separate text segments from pause segments
+        text_segments = []
+        pause_segments = []
+        segment_map = []  # Track original order
+        
+        for idx, (voice, content) in enumerate(segments):
+            if voice == "PAUSE":
+                pause_segments.append((idx, content))
+                segment_map.append(("PAUSE", len(pause_segments) - 1))
+            else:
+                text_segments.append((idx, voice, content))
+                segment_map.append(("TEXT", len(text_segments) - 1))
+        
+        # Pre-allocate GPU memory for batch processing using memory pool
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Pre-allocate larger memory chunks for batch processing
+            try:
+                if gpu_memory_pool:
+                    # Pre-allocate batch-sized tensors
+                    batch_size = MAX_BATCH_SIZE * 1024
+                    dummy_tensor = allocate_gpu_tensor(batch_size, torch.float32, device)
+                    free_gpu_tensor(dummy_tensor)
+                else:
+                    dummy_tensor = torch.zeros(MAX_BATCH_SIZE, 1024, device=device)
+                    del dummy_tensor
+            except:
+                pass  # Continue if allocation fails
+        
+        logger.info(f"🚀 Processing {len(text_segments)} text segments in batches of {MAX_BATCH_SIZE}")
+        
+        # Process text segments in batches for higher GPU utilization
+        text_audio_results = {}
+        batch_processing_enabled = ENABLE_BATCH_PROCESSING  # Local copy to avoid scoping issues
+        
+        if batch_processing_enabled and len(text_segments) > 1:
+            # BATCH PROCESSING MODE - Higher GPU Utilization
+            for batch_start in range(0, len(text_segments), MAX_BATCH_SIZE):
+                batch_end = min(batch_start + MAX_BATCH_SIZE, len(text_segments))
+                batch = text_segments[batch_start:batch_end]
+                
+                logger.info(f"🔥 Processing batch {batch_start//MAX_BATCH_SIZE + 1} with {len(batch)} segments (GPU INTENSIVE)")
+                
+                # Prepare all batch data
+                batch_entries = []
+                batch_attributes = []
+                batch_indices = []
+                
+                for idx, voice, content in batch:
+                    entries = tts_model.prepare_script([content], padding_between=1)
+                    voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
+                    attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
+                    
+                    batch_entries.append(entries)
+                    batch_attributes.append(attributes)
+                    batch_indices.append(idx)
+                
+                # PARALLEL GPU GENERATION - This maxes out GPU utilization
+                try:
+                    with torch.no_grad():
+                        # Process multiple segments simultaneously
+                        batch_results = []
+                        
+                        # Create multiple CUDA streams for concurrent execution
+                        if torch.cuda.is_available():
+                            streams = [torch.cuda.Stream() for _ in range(min(len(batch), 4))]  # Limit streams
+                            
+                            # Launch parallel generations
+                            for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                                stream_idx = i % len(streams)  # Cycle through available streams
+                                with torch.cuda.stream(streams[stream_idx]):
+                                    result = tts_model.generate([entries], [attributes])
+                                    batch_results.append((batch_indices[i], result))
+                            
+                            # Synchronize all streams
+                            for stream in streams:
+                                stream.synchronize()
+                        else:
+                            # CPU fallback
+                            for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                                result = tts_model.generate([entries], [attributes])
+                                batch_results.append((batch_indices[i], result))
+                        
+                        logger.info(f"✅ Batch completed with {len(batch_results)} parallel generations")
+                        
+                        # Decode all results (keeping on GPU as long as possible)
+                        for idx, result in batch_results:
+                            try:
+                                with tts_model.mimi.streaming(1), torch.no_grad():
+                                    pcms = []
+                                    for frame in result.frames[tts_model.delay_steps:]:
+                                        decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                                        pcm = torch.clamp(decoded, -1, 1)
+                                        pcms.append(pcm[0, 0])
+                                    
+                                    # Keep on GPU until final transfer
+                                    pcm_tensor = torch.cat(pcms, dim=-1)
+                                    pcm_data = pcm_tensor.cpu().numpy()
+                                    
+                                    # Store result
+                                    text_audio_results[idx] = pcm_data
+                                    
+                            except Exception as decode_error:
+                                logger.error(f"Batch decode failed for segment {idx}: {decode_error}")
+                                continue
+                                
+                except Exception as batch_error:
+                    logger.error(f"Batch processing failed: {batch_error}")
+                    # Fallback to sequential processing
+                    logger.info("🔄 Falling back to sequential processing")
+                    batch_processing_enabled = False
+        
+        # Sequential fallback or single segment
+        if not batch_processing_enabled or len(text_segments) <= 1:
+            logger.info("📝 Using sequential processing")
+            for idx, voice, content in text_segments:
+                segment_start = time.time()
+                logger.info(f"🔄 Processing segment {idx + 1}: Voice='{voice}'")
+                
                 entries = tts_model.prepare_script([content], padding_between=1)
                 voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
                 attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
                 
-                batch_entries.append(entries)
-                batch_attributes.append(attributes)
-                batch_indices.append(idx)
-            
-            # PARALLEL GPU GENERATION - This maxes out GPU utilization
-            try:
-                with torch.no_grad():
-                    # Process multiple segments simultaneously
-                    batch_results = []
+                try:
+                    with torch.no_grad():
+                        result = tts_model.generate([entries], [attributes])
                     
-                    # Create multiple CUDA streams for concurrent execution
+                    with tts_model.mimi.streaming(1), torch.no_grad():
+                        pcms = []
+                        for frame in result.frames[tts_model.delay_steps:]:
+                            decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                            pcm = torch.clamp(decoded, -1, 1)
+                            pcms.append(pcm[0, 0])
+                        
+                        pcm_tensor = torch.cat(pcms, dim=-1)
+                        pcm_data = pcm_tensor.cpu().numpy()
+                        text_audio_results[idx] = pcm_data
+                        
+                    segment_time = time.time() - segment_start
+                    logger.debug(f"⏱️  Sequential segment completed in {segment_time:.2f}s")
+                    
+                except Exception as e:
+                    logger.error(f"Sequential processing failed for segment {idx}: {e}")
+                    continue
+        
+        # Reconstruct audio in original order
+        logger.info("🔗 Reconstructing audio in original order...")
+        output_audio_segments = []
+        
+        for segment_type, segment_idx in segment_map:
+            if segment_type == "PAUSE":
+                original_idx, pause_audio = pause_segments[segment_idx]
+                output_audio_segments.append(pause_audio)
+            else:
+                original_idx = text_segments[segment_idx][0]
+                if original_idx in text_audio_results:
+                    # Convert to AudioSegment
+                    pcm_data = text_audio_results[original_idx]
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
+                        sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
+                        segment_audio = AudioSegment.from_wav(wav_fp.name)
+                        output_audio_segments.append(segment_audio)
+                        os.unlink(wav_fp.name)
+        
+        if not output_audio_segments:
+            logger.warning("No audio was generated, returning empty audio file.")
+            final_audio = AudioSegment.silent(duration=1)
+        else:
+            logger.info("🔗 Combining audio segments...")
+            final_audio = output_audio_segments[0]
+            for segment in output_audio_segments[1:]:
+                final_audio += segment
+
+        logger.info("🎚️  Normalizing final audio...")
+        final_audio = final_audio.normalize()
+        final_audio = final_audio.set_frame_rate(44100).set_sample_width(2).set_channels(1)
+        
+        # CONCURRENT GPU CLEANING for maximum utilization
+        if apply_cleaning and ENABLE_CONCURRENT_CLEANING:
+            try:
+                cleaning_start = time.time()
+                logger.info("🧹 Applying CONCURRENT GPU-accelerated cleaning...")
+                
+                # Split audio into chunks for concurrent processing
+                audio_duration = len(final_audio)
+                if audio_duration > 4000:  # Only split if audio is longer than 4 seconds
+                    chunk_size = audio_duration // 4  # 4 concurrent chunks
+                    chunks = [final_audio[i:i+chunk_size] for i in range(0, audio_duration, chunk_size)]
+                    
+                    # Process chunks concurrently
+                    cleaned_chunks = []
+                    
                     if torch.cuda.is_available():
-                        streams = [torch.cuda.Stream() for _ in range(min(len(batch), 4))]  # Limit streams
+                        streams = [torch.cuda.Stream() for _ in range(min(len(chunks), 4))]
                         
-                        # Launch parallel generations
-                        for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
-                            stream_idx = i % len(streams)  # Cycle through available streams
+                        for i, chunk in enumerate(chunks):
+                            stream_idx = i % len(streams)
                             with torch.cuda.stream(streams[stream_idx]):
-                                result = tts_model.generate([entries], [attributes])
-                                batch_results.append((batch_indices[i], result))
+                                cleaned_chunk = clean_audio_segment_gpu(
+                                    chunk,
+                                    volume_boost=volume_boost,
+                                    remove_crackles=remove_crackles,
+                                    apply_filters=apply_filters,
+                                    reduce_noise=reduce_noise
+                                )
+                                cleaned_chunks.append(cleaned_chunk)
                         
-                        # Synchronize all streams
+                        # Synchronize and combine
                         for stream in streams:
                             stream.synchronize()
                     else:
                         # CPU fallback
-                        for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
-                            result = tts_model.generate([entries], [attributes])
-                            batch_results.append((batch_indices[i], result))
-                    
-                    logger.info(f"✅ Batch completed with {len(batch_results)} parallel generations")
-                    
-                    # Decode all results (keeping on GPU as long as possible)
-                    for idx, result in batch_results:
-                        try:
-                            with tts_model.mimi.streaming(1), torch.no_grad():
-                                pcms = []
-                                for frame in result.frames[tts_model.delay_steps:]:
-                                    decoded = tts_model.mimi.decode(frame[:, 1:, :])
-                                    pcm = torch.clamp(decoded, -1, 1)
-                                    pcms.append(pcm[0, 0])
-                                
-                                # Keep on GPU until final transfer
-                                pcm_tensor = torch.cat(pcms, dim=-1)
-                                pcm_data = pcm_tensor.cpu().numpy()
-                                
-                                # Store result
-                                text_audio_results[idx] = pcm_data
-                                
-                        except Exception as decode_error:
-                            logger.error(f"Batch decode failed for segment {idx}: {decode_error}")
-                            continue
-                            
-            except Exception as batch_error:
-                logger.error(f"Batch processing failed: {batch_error}")
-                # Fallback to sequential processing
-                logger.info("🔄 Falling back to sequential processing")
-                batch_processing_enabled = False
-    
-    # Sequential fallback or single segment
-    if not batch_processing_enabled or len(text_segments) <= 1:
-        logger.info("📝 Using sequential processing")
-        for idx, voice, content in text_segments:
-            segment_start = time.time()
-            logger.info(f"🔄 Processing segment {idx + 1}: Voice='{voice}'")
-            
-            entries = tts_model.prepare_script([content], padding_between=1)
-            voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
-            attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
-            
-            try:
-                with torch.no_grad():
-                    result = tts_model.generate([entries], [attributes])
-                
-                with tts_model.mimi.streaming(1), torch.no_grad():
-                    pcms = []
-                    for frame in result.frames[tts_model.delay_steps:]:
-                        decoded = tts_model.mimi.decode(frame[:, 1:, :])
-                        pcm = torch.clamp(decoded, -1, 1)
-                        pcms.append(pcm[0, 0])
-                    
-                    pcm_tensor = torch.cat(pcms, dim=-1)
-                    pcm_data = pcm_tensor.cpu().numpy()
-                    text_audio_results[idx] = pcm_data
-                    
-                segment_time = time.time() - segment_start
-                logger.debug(f"⏱️  Sequential segment completed in {segment_time:.2f}s")
-                
-            except Exception as e:
-                logger.error(f"Sequential processing failed for segment {idx}: {e}")
-                continue
-    
-    # Reconstruct audio in original order
-    logger.info("🔗 Reconstructing audio in original order...")
-    output_audio_segments = []
-    
-    for segment_type, segment_idx in segment_map:
-        if segment_type == "PAUSE":
-            original_idx, pause_audio = pause_segments[segment_idx]
-            output_audio_segments.append(pause_audio)
-        else:
-            original_idx = text_segments[segment_idx][0]
-            if original_idx in text_audio_results:
-                # Convert to AudioSegment
-                pcm_data = text_audio_results[original_idx]
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
-                    sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
-                    segment_audio = AudioSegment.from_wav(wav_fp.name)
-                    output_audio_segments.append(segment_audio)
-                    os.unlink(wav_fp.name)
-    
-    if not output_audio_segments:
-        logger.warning("No audio was generated, returning empty audio file.")
-        final_audio = AudioSegment.silent(duration=1)
-    else:
-        logger.info("🔗 Combining audio segments...")
-        final_audio = output_audio_segments[0]
-        for segment in output_audio_segments[1:]:
-            final_audio += segment
-
-    logger.info("🎚️  Normalizing final audio...")
-    final_audio = final_audio.normalize()
-    final_audio = final_audio.set_frame_rate(44100).set_sample_width(2).set_channels(1)
-    
-    # CONCURRENT GPU CLEANING for maximum utilization
-    if apply_cleaning and ENABLE_CONCURRENT_CLEANING:
-        try:
-            cleaning_start = time.time()
-            logger.info("🧹 Applying CONCURRENT GPU-accelerated cleaning...")
-            
-            # Split audio into chunks for concurrent processing
-            audio_duration = len(final_audio)
-            if audio_duration > 4000:  # Only split if audio is longer than 4 seconds
-                chunk_size = audio_duration // 4  # 4 concurrent chunks
-                chunks = [final_audio[i:i+chunk_size] for i in range(0, audio_duration, chunk_size)]
-                
-                # Process chunks concurrently
-                cleaned_chunks = []
-                
-                if torch.cuda.is_available():
-                    streams = [torch.cuda.Stream() for _ in range(min(len(chunks), 4))]
-                    
-                    for i, chunk in enumerate(chunks):
-                        stream_idx = i % len(streams)
-                        with torch.cuda.stream(streams[stream_idx]):
+                        for chunk in chunks:
                             cleaned_chunk = clean_audio_segment_gpu(
-                                chunk,
-                                volume_boost=volume_boost,
-                                remove_crackles=remove_crackles,
-                                apply_filters=apply_filters,
-                                reduce_noise=reduce_noise
+                                chunk, volume_boost, remove_crackles, apply_filters, reduce_noise
                             )
                             cleaned_chunks.append(cleaned_chunk)
-                    
-                    # Synchronize and combine
-                    for stream in streams:
-                        stream.synchronize()
+                        
+                        # Combine cleaned chunks
+                        final_audio = sum(cleaned_chunks)
                 else:
-                    # CPU fallback
-                    for chunk in chunks:
-                        cleaned_chunk = clean_audio_segment_gpu(
-                            chunk, volume_boost, remove_crackles, apply_filters, reduce_noise
-                        )
-                        cleaned_chunks.append(cleaned_chunk)
+                    # Audio too short for chunking, use standard cleaning
+                    final_audio = clean_audio_segment_gpu(
+                        final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise
+                    )
                 
-                # Combine cleaned chunks
-                final_audio = sum(cleaned_chunks)
-            else:
-                # Audio too short for chunking, use standard cleaning
-                final_audio = clean_audio_segment_gpu(
-                    final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise
-                )
-            
-            cleaning_time = time.time() - cleaning_start
-            logger.info(f"✅ CONCURRENT audio cleaning completed in {cleaning_time:.2f}s")
-        except Exception as cleaning_error:
-            logger.warning(f"Concurrent GPU cleaning failed, using standard cleaning: {cleaning_error}")
-            # Fallback to standard cleaning
+                cleaning_time = time.time() - cleaning_start
+                logger.info(f"✅ CONCURRENT audio cleaning completed in {cleaning_time:.2f}s")
+            except Exception as cleaning_error:
+                logger.warning(f"Concurrent GPU cleaning failed, using standard cleaning: {cleaning_error}")
+                # Fallback to standard cleaning
+                try:
+                    final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
+                except Exception as fallback_error:
+                    logger.warning(f"Standard cleaning also failed: {fallback_error}")
+        elif apply_cleaning:
+            # Standard GPU cleaning
             try:
+                logger.info("🧹 Applying standard GPU cleaning...")
                 final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
-            except Exception as fallback_error:
-                logger.warning(f"Standard cleaning also failed: {fallback_error}")
-    elif apply_cleaning:
-        # Standard GPU cleaning
-        try:
-            logger.info("🧹 Applying standard GPU cleaning...")
-            final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
-        except Exception as cleaning_error:
-            logger.warning(f"GPU cleaning failed: {cleaning_error}")
-    
-    # Export
-    export_start = time.time()
-    if output_format.lower() == "wav":
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
-            final_audio.export(wav_fp.name, format="wav", parameters=["-ac", "1"])
-            export_time = time.time() - export_start
-            logger.info(f"📁 Final audio exported as WAV in {export_time:.2f}s")
-            total_time = time.time() - start_time
-            logger.info(f"🎉 HIGH GPU UTILIZATION generation completed in {total_time:.2f}s")
-            if ENABLE_MONITORING:
-                log_system_usage()
-            return wav_fp.name
-    else:
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_fp:
-            final_audio.export(mp3_fp.name, format="mp3", bitrate="320k", parameters=["-ac", "1"])
-            export_time = time.time() - export_start
-            logger.info(f"📁 Final audio exported as MP3 in {export_time:.2f}s")
-            total_time = time.time() - start_time
-            logger.info(f"🎉 HIGH GPU UTILIZATION generation completed in {total_time:.2f}s")
-            if ENABLE_MONITORING:
-                log_system_usage()
-            return mp3_fp.name
+            except Exception as cleaning_error:
+                logger.warning(f"GPU cleaning failed: {cleaning_error}")
+        
+        # Export
+        export_start = time.time()
+        if output_format.lower() == "wav":
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
+                final_audio.export(wav_fp.name, format="wav", parameters=["-ac", "1"])
+                export_time = time.time() - export_start
+                logger.info(f"📁 Final audio exported as WAV in {export_time:.2f}s")
+                total_time = time.time() - start_time
+                logger.info(f"🎉 HIGH GPU UTILIZATION generation completed in {total_time:.2f}s")
+                if ENABLE_MONITORING:
+                    log_system_usage()
+                return wav_fp.name
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_fp:
+                final_audio.export(mp3_fp.name, format="mp3", bitrate="320k", parameters=["-ac", "1"])
+                export_time = time.time() - export_start
+                logger.info(f"📁 Final audio exported as MP3 in {export_time:.2f}s")
+                total_time = time.time() - start_time
+                logger.info(f"🎉 HIGH GPU UTILIZATION generation completed in {total_time:.2f}s")
+                if ENABLE_MONITORING:
+                    log_system_usage()
+                return mp3_fp.name
 
 # Use high GPU utilization version by default
 generate_audio = generate_audio_high_gpu_util
@@ -959,9 +1176,37 @@ def get_voices():
     """Get available voice options"""
     return {"voices": list(VOICE_OPTIONS.keys())}
 
+@app.post("/api/memory/cleanup")
+def cleanup_memory():
+    """Force cleanup of GPU memory pool"""
+    if gpu_memory_pool:
+        gpu_memory_pool.cleanup(force=True)
+        return {"status": "success", "message": "GPU memory pool cleaned"}
+    else:
+        return {"status": "no_op", "message": "No GPU memory pool available"}
+
+@app.get("/api/memory/stats")
+def get_memory_stats():
+    """Get detailed memory pool statistics"""
+    if gpu_memory_pool:
+        stats = gpu_memory_pool.get_memory_stats()
+        return {
+            "status": "success",
+            "memory_pool": stats,
+            "pytorch_memory": {
+                "allocated_gb": torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0,
+                "cached_gb": torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0,
+                "total_gb": torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0
+            }
+        }
+    else:
+        return {"status": "no_pool", "message": "No GPU memory pool available"}
+
 @app.get("/api/health")
 def health_check():
     """Health check endpoint"""
+    memory_pool_stats = gpu_memory_pool.get_memory_stats() if gpu_memory_pool else None
+    
     return {
         "status": "healthy",
         "model_loaded": MODEL_LOADED,
@@ -969,7 +1214,8 @@ def health_check():
         "cuda_available": torch.cuda.is_available(),
         "compilation_enabled": COMPILATION_ENABLED if MODEL_LOADED else False,
         "gpu_memory": f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB" if torch.cuda.is_available() else "N/A",
-        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration", "error_recovery"]
+        "memory_pool": memory_pool_stats,
+        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration", "error_recovery", "memory_pooling"]
     }
 
 @app.get("/")
@@ -983,7 +1229,9 @@ def root():
             "tts": "/api/tts",
             "clean_audio": "/api/clean-audio", 
             "voices": "/api/voices",
-            "health": "/api/health"
+            "health": "/api/health",
+            "memory_stats": "/api/memory/stats",
+            "memory_cleanup": "/api/memory/cleanup"
         },
         "features": [
             "GPU-accelerated Text-to-Speech with multiple voices and formats (MP3/WAV)",
@@ -991,7 +1239,8 @@ def root():
             "GPU-accelerated audio cleaning (crackle removal, noise reduction)",
             "Hardware-optimized volume boosting and filtering",
             "Multiple audio format support for file cleaning",
-            "Automatic mixed precision for improved performance"
+            "Automatic mixed precision for improved performance",
+            "Advanced GPU memory pooling for efficient memory management"
         ]
     }
 
