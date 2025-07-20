@@ -50,6 +50,11 @@ class GPUMemoryPool:
         self.cleanup_threshold = 0.7  # Cleanup when 70% of max memory is used
         self.pool_sizes = [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
         
+        # Adaptive memory management
+        self.usage_history = []  # Track memory usage patterns
+        self.adaptive_cleanup = True
+        self.peak_usage_threshold = 0.8  # Trigger cleanup at 80% peak usage
+        
         if torch.cuda.is_available():
             self.total_gpu_memory = torch.cuda.get_device_properties(0).total_memory
             self.max_allocated_memory = int(self.total_gpu_memory * max_memory_fraction)
@@ -58,6 +63,26 @@ class GPUMemoryPool:
             self.total_gpu_memory = 0
             self.max_allocated_memory = 0
             logger.info("🧠 GPU Memory Pool initialized (CPU mode)")
+    
+    def update_usage_history(self):
+        """Track memory usage patterns for adaptive management"""
+        current_usage = self.total_allocated / self.max_allocated_memory
+        self.usage_history.append(current_usage)
+        
+        # Keep last 100 measurements
+        if len(self.usage_history) > 100:
+            self.usage_history.pop(0)
+        
+        # Adaptive cleanup threshold based on usage patterns
+        if len(self.usage_history) > 10:
+            avg_usage = sum(self.usage_history) / len(self.usage_history)
+            peak_usage = max(self.usage_history)
+            
+            # Adjust cleanup threshold based on usage patterns
+            if peak_usage > 0.9:  # High peak usage
+                self.cleanup_threshold = min(0.6, self.cleanup_threshold * 0.95)
+            elif avg_usage < 0.3:  # Low average usage
+                self.cleanup_threshold = min(0.8, self.cleanup_threshold * 1.05)
     
     def get_nearest_pool_size(self, size):
         """Find the nearest pool size for efficient allocation"""
@@ -74,6 +99,9 @@ class GPUMemoryPool:
         if not torch.cuda.is_available() or device.type == 'cpu':
             # CPU fallback
             return torch.empty(size, dtype=dtype, device=device)
+        
+        # Update usage history for adaptive management
+        self.update_usage_history()
         
         # Check if we need cleanup
         if self.total_allocated > self.max_allocated_memory * self.cleanup_threshold:
@@ -251,6 +279,146 @@ ENABLE_CPU_OPTIMIZATIONS = True  # Enable CPU usage optimizations
 ENABLE_BATCH_PROCESSING = True  # Enable batch processing for higher GPU utilization
 MAX_BATCH_SIZE = 4  # Process up to 4 segments simultaneously
 ENABLE_CONCURRENT_CLEANING = True  # Enable concurrent audio cleaning
+
+# Request queue management
+from queue import Queue
+from threading import Lock
+import asyncio
+import hashlib
+import json
+
+class AudioCache:
+    """Cache for frequently requested audio generations"""
+    
+    def __init__(self, max_cache_size=100, cache_dir="/tmp/tts_cache"):
+        self.cache = {}
+        self.max_cache_size = max_cache_size
+        self.cache_dir = cache_dir
+        self.cache_stats = {
+            "hits": 0,
+            "misses": 0,
+            "evictions": 0
+        }
+        
+        # Create cache directory
+        os.makedirs(cache_dir, exist_ok=True)
+    
+    def generate_cache_key(self, text, voice, output_format, **kwargs):
+        """Generate a unique cache key for the request"""
+        # Create a hash of the request parameters
+        cache_data = {
+            "text": text,
+            "voice": voice,
+            "output_format": output_format,
+            **kwargs
+        }
+        cache_string = json.dumps(cache_data, sort_keys=True)
+        return hashlib.md5(cache_string.encode()).hexdigest()
+    
+    def get_cached_audio(self, cache_key):
+        """Retrieve cached audio if available"""
+        if cache_key in self.cache:
+            file_path = self.cache[cache_key]["file_path"]
+            if os.path.exists(file_path):
+                self.cache_stats["hits"] += 1
+                logger.info(f"🎯 Cache hit for key: {cache_key[:8]}...")
+                return file_path
+        
+        self.cache_stats["misses"] += 1
+        return None
+    
+    def cache_audio(self, cache_key, file_path, metadata=None):
+        """Cache the generated audio"""
+        if len(self.cache) >= self.max_cache_size:
+            # Evict oldest entry
+            oldest_key = next(iter(self.cache))
+            old_file = self.cache[oldest_key]["file_path"]
+            if os.path.exists(old_file):
+                os.unlink(old_file)
+            del self.cache[oldest_key]
+            self.cache_stats["evictions"] += 1
+        
+        self.cache[cache_key] = {
+            "file_path": file_path,
+            "created_at": time.time(),
+            "metadata": metadata or {}
+        }
+        logger.info(f"💾 Cached audio for key: {cache_key[:8]}...")
+    
+    def get_stats(self):
+        """Get cache statistics"""
+        hit_rate = self.cache_stats["hits"] / max(1, self.cache_stats["hits"] + self.cache_stats["misses"]) * 100
+        return {
+            "cache_size": len(self.cache),
+            "max_cache_size": self.max_cache_size,
+            "hit_rate_percent": hit_rate,
+            **self.cache_stats
+        }
+
+# Global cache instance
+audio_cache = AudioCache()
+
+class RequestQueue:
+    """Manage concurrent requests to prevent memory overload"""
+    
+    def __init__(self, max_concurrent=3, max_queue_size=10):
+        self.queue = Queue(maxsize=max_queue_size)
+        self.active_requests = 0
+        self.max_concurrent = max_concurrent
+        self.lock = Lock()
+        self.request_stats = {
+            "total_requests": 0,
+            "completed_requests": 0,
+            "failed_requests": 0,
+            "avg_processing_time": 0
+        }
+    
+    async def submit_request(self, request_func, *args, **kwargs):
+        """Submit a request to the queue"""
+        if self.active_requests >= self.max_concurrent:
+            # Queue is full, reject request
+            raise RuntimeError("Server is at maximum capacity. Please try again later.")
+        
+        with self.lock:
+            self.active_requests += 1
+            self.request_stats["total_requests"] += 1
+        
+        try:
+            start_time = time.time()
+            result = await request_func(*args, **kwargs)
+            processing_time = time.time() - start_time
+            
+            # Update statistics
+            with self.lock:
+                self.request_stats["completed_requests"] += 1
+                # Update average processing time
+                total_completed = self.request_stats["completed_requests"]
+                current_avg = self.request_stats["avg_processing_time"]
+                self.request_stats["avg_processing_time"] = (current_avg * (total_completed - 1) + processing_time) / total_completed
+            
+            return result
+        except Exception as e:
+            with self.lock:
+                self.request_stats["failed_requests"] += 1
+            raise e
+        finally:
+            with self.lock:
+                self.active_requests -= 1
+    
+    def get_stats(self):
+        """Get queue statistics"""
+        with self.lock:
+            return {
+                "active_requests": self.active_requests,
+                "max_concurrent": self.max_concurrent,
+                "queue_size": self.queue.qsize(),
+                "queue_max_size": self.queue.maxsize,
+                **self.request_stats
+            }
+
+# Global request queue
+request_queue = RequestQueue()
+
 logger.info(f"Using device: {device}")
 
 # CPU optimization settings
@@ -1075,8 +1243,8 @@ class AudioCleaningRequest(BaseModel):
 
 # --- API Endpoints (updated for GPU optimization) ---
 @app.post("/api/tts")
-def tts_endpoint(request: TTSRequest):
-    """Generate TTS audio with optional GPU-accelerated cleaning"""
+async def tts_endpoint(request: TTSRequest):
+    """Generate TTS audio with optional GPU-accelerated cleaning and caching"""
     logger.info(f"TTS API endpoint hit. Format: {request.output_format}, Cleaning: {request.apply_cleaning}")
     
     if request.output_format.lower() not in ["mp3", "wav"]:
@@ -1085,8 +1253,33 @@ def tts_endpoint(request: TTSRequest):
             content={"detail": "Invalid output format. Use 'mp3' or 'wav'."}
         )
     
-    try:
-        output_path = generate_audio(
+    # Generate cache key
+    cache_key = audio_cache.generate_cache_key(
+        request.text, 
+        request.voice_choice, 
+        request.output_format,
+        apply_cleaning=request.apply_cleaning,
+        volume_boost=request.volume_boost,
+        remove_crackles=request.remove_crackles,
+        apply_filters=request.apply_filters,
+        reduce_noise=request.reduce_noise
+    )
+    
+    # Check cache first
+    cached_path = audio_cache.get_cached_audio(cache_key)
+    if cached_path:
+        if request.output_format.lower() == "wav":
+            media_type = "audio/wav"
+            filename = "generated_speech.wav"
+        else:
+            media_type = "audio/mpeg"
+            filename = "generated_speech.mp3"
+        
+        return FileResponse(cached_path, media_type=media_type, filename=filename)
+    
+    # Generate new audio through request queue
+    async def generate_audio_async():
+        return generate_audio(
             request.text, 
             request.voice_choice, 
             output_format=request.output_format,
@@ -1096,6 +1289,16 @@ def tts_endpoint(request: TTSRequest):
             apply_filters=request.apply_filters,
             reduce_noise=request.reduce_noise
         )
+    
+    try:
+        output_path = await request_queue.submit_request(generate_audio_async)
+        
+        # Cache the result
+        audio_cache.cache_audio(cache_key, output_path, {
+            "text_length": len(request.text),
+            "voice": request.voice_choice,
+            "format": request.output_format
+        })
         
         if request.output_format.lower() == "wav":
             media_type = "audio/wav"
@@ -1106,6 +1309,14 @@ def tts_endpoint(request: TTSRequest):
         
         return FileResponse(output_path, media_type=media_type, filename=filename)
         
+    except RuntimeError as e:
+        if "maximum capacity" in str(e):
+            return JSONResponse(
+                status_code=503, 
+                content={"detail": "Server is at maximum capacity. Please try again later."}
+            )
+        else:
+            return JSONResponse(status_code=400, content={"detail": str(e)})
     except ValueError as e:
         logger.error(f"Invalid input provided: {e}")
         return JSONResponse(status_code=400, content={"detail": str(e)})
@@ -1202,10 +1413,32 @@ def get_memory_stats():
     else:
         return {"status": "no_pool", "message": "No GPU memory pool available"}
 
+@app.get("/api/queue/stats")
+def get_queue_stats():
+    """Get request queue statistics"""
+    return {
+        "status": "success",
+        "request_queue": request_queue.get_stats(),
+        "audio_cache": audio_cache.get_stats()
+    }
+
+@app.post("/api/cache/clear")
+def clear_cache():
+    """Clear the audio cache"""
+    audio_cache.cache.clear()
+    audio_cache.cache_stats = {
+        "hits": 0,
+        "misses": 0,
+        "evictions": 0
+    }
+    return {"status": "success", "message": "Audio cache cleared"}
+
 @app.get("/api/health")
 def health_check():
     """Health check endpoint"""
     memory_pool_stats = gpu_memory_pool.get_memory_stats() if gpu_memory_pool else None
+    queue_stats = request_queue.get_stats()
+    cache_stats = audio_cache.get_stats()
     
     return {
         "status": "healthy",
@@ -1215,7 +1448,9 @@ def health_check():
         "compilation_enabled": COMPILATION_ENABLED if MODEL_LOADED else False,
         "gpu_memory": f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB" if torch.cuda.is_available() else "N/A",
         "memory_pool": memory_pool_stats,
-        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration", "error_recovery", "memory_pooling"]
+        "request_queue": queue_stats,
+        "audio_cache": cache_stats,
+        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration", "error_recovery", "memory_pooling", "request_queue", "audio_caching"]
     }
 
 @app.get("/")
@@ -1231,7 +1466,9 @@ def root():
             "voices": "/api/voices",
             "health": "/api/health",
             "memory_stats": "/api/memory/stats",
-            "memory_cleanup": "/api/memory/cleanup"
+            "memory_cleanup": "/api/memory/cleanup",
+            "queue_stats": "/api/queue/stats",
+            "cache_clear": "/api/cache/clear"
         },
         "features": [
             "GPU-accelerated Text-to-Speech with multiple voices and formats (MP3/WAV)",
@@ -1240,7 +1477,10 @@ def root():
             "Hardware-optimized volume boosting and filtering",
             "Multiple audio format support for file cleaning",
             "Automatic mixed precision for improved performance",
-            "Advanced GPU memory pooling for efficient memory management"
+            "Advanced GPU memory pooling for efficient memory management",
+            "Request queue management for load balancing",
+            "Audio caching for improved response times",
+            "Adaptive memory management based on usage patterns"
         ]
     }
 
