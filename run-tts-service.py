@@ -274,11 +274,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # Global device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-ENABLE_COMPILATION = True  # Set to False to disable torch.compile attempts
+ENABLE_COMPILATION = False  # Temporarily disable compilation to focus on other optimizations
 ENABLE_CPU_OPTIMIZATIONS = True  # Enable CPU usage optimizations
 ENABLE_BATCH_PROCESSING = True  # Enable batch processing for higher GPU utilization
-MAX_BATCH_SIZE = 4  # Process up to 4 segments simultaneously
+MAX_BATCH_SIZE = 8  # Process up to 8 segments simultaneously (increased from 4)
 ENABLE_CONCURRENT_CLEANING = True  # Enable concurrent audio cleaning
+ENABLE_FAST_MODE = True  # Enable fast mode without audio cleaning for speed
 
 # Request queue management
 from queue import Queue
@@ -792,15 +793,22 @@ try:
     
     # Enable basic CUDA optimizations if available
     if torch.cuda.is_available():
-        # Enable CUDA optimizations (conservative settings for stability)
-        torch.backends.cudnn.benchmark = False  # More conservative for variable input sizes
-        torch.backends.cudnn.deterministic = True
+        # Enable CUDA optimizations (more aggressive settings for speed)
+        torch.backends.cudnn.benchmark = True  # Enable for better performance
+        torch.backends.cudnn.deterministic = False  # Disable for speed
+        torch.backends.cuda.matmul.allow_tf32 = True  # Enable TF32 for speed
+        torch.backends.cudnn.allow_tf32 = True  # Enable TF32 for cuDNN
+        
+        # Additional optimizations for better performance
+        torch.backends.cuda.enable_flash_sdp(True)  # Enable flash attention if available
+        torch.backends.cuda.enable_mem_efficient_sdp(True)  # Enable memory efficient attention
+        torch.backends.cuda.enable_math_sdp(True)  # Enable math attention
         
         # Initialize memory pool and pre-allocate memory for better performance
         try:
             torch.cuda.empty_cache()
-            # Reserve 85% of GPU memory for this process (more conservative)
-            torch.cuda.set_per_process_memory_fraction(0.85)
+            # Reserve 90% of GPU memory for this process (more aggressive)
+            torch.cuda.set_per_process_memory_fraction(0.90)
             
             # Pre-allocate some common tensor sizes in the memory pool
             if gpu_memory_pool:
@@ -816,21 +824,22 @@ try:
         except Exception as mem_error:
             logger.warning(f"GPU memory pre-allocation failed: {mem_error}")
         
-        # Attempt model compilation with fallback (only if enabled)
+        # Enhanced model compilation with multiple fallback strategies
         if ENABLE_COMPILATION:
+            logger.info("🚀 Attempting enhanced model compilation with multiple strategies...")
+            
+            # Strategy 1: Simple compilation without backend specification
             try:
-                logger.info("Attempting model compilation...")
-                
-                # Use more conservative compilation settings to avoid dtype issues
+                logger.info("📈 Strategy 1: Simple compilation without backend...")
                 compiled_model = torch.compile(
                     tts_model, 
-                    mode="default",  # Less aggressive than max-autotune
+                    mode="reduce-overhead",  # More aggressive than "default"
                     fullgraph=False,  # Allow graph breaks for better compatibility
                     dynamic=True      # Handle variable input sizes better
                 )
                 
                 # Test the compiled model with a simple generation
-                logger.info("Testing compiled model with dummy generation...")
+                logger.info("🧪 Testing compiled model with dummy generation...")
                 test_entries = tts_model.prepare_script(["test"], padding_between=1)
                 test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
                 test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
@@ -841,23 +850,149 @@ try:
                 
                 tts_model = compiled_model
                 COMPILATION_ENABLED = True
-                logger.info("✅ Model compiled successfully with torch.compile!")
+                logger.info("✅ Strategy 1 SUCCESS! Model compiled with reduce-overhead mode!")
                 
-            except Exception as compile_error:
-                logger.warning(f"⚠️  Model compilation failed, using uncompiled model.")
-                logger.debug(f"Compilation error details: {compile_error}")
-                COMPILATION_ENABLED = False
-                # Continue with uncompiled model
+            except Exception as compile_error_1:
+                logger.warning(f"⚠️  Strategy 1 failed: {str(compile_error_1)}")
+                logger.debug(f"Strategy 1 error details: {type(compile_error_1).__name__}: {compile_error_1}")
                 
-                # Additional debugging for common compilation issues
-                if "scatter" in str(compile_error).lower():
-                    logger.info("💡 Compilation failed due to scatter operation compatibility. This is common with complex transformer models.")
-                elif "dtype" in str(compile_error).lower():
-                    logger.info("💡 Compilation failed due to dtype mismatch. The model will run efficiently without compilation.")
-                elif "graph break" in str(compile_error).lower():
-                    logger.info("💡 Compilation failed due to graph breaks. Consider setting fullgraph=False (already enabled).")
-                else:
-                    logger.info("💡 Compilation failed for unknown reasons. The uncompiled model will work fine.")
+                # Strategy 2: Conservative compilation with default mode
+                try:
+                    logger.info("📈 Strategy 2: Conservative compilation with default mode...")
+                    compiled_model = torch.compile(
+                        tts_model, 
+                        mode="default",  # Conservative mode
+                        fullgraph=False,  # Allow graph breaks
+                        dynamic=True      # Handle variable inputs
+                    )
+                    
+                    # Test the compiled model
+                    logger.info("🧪 Testing compiled model...")
+                    test_entries = tts_model.prepare_script(["test"], padding_between=1)
+                    test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
+                    test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
+                    
+                    with torch.no_grad():
+                        _ = compiled_model.generate([test_entries], [test_attributes])
+                    
+                    tts_model = compiled_model
+                    COMPILATION_ENABLED = True
+                    logger.info("✅ Strategy 2 SUCCESS! Model compiled with default mode!")
+                    
+                except Exception as compile_error_2:
+                    logger.warning(f"⚠️  Strategy 2 failed: {str(compile_error_2)}")
+                    logger.debug(f"Strategy 2 error details: {type(compile_error_2).__name__}: {compile_error_2}")
+                    
+                    # Strategy 3: Minimal compilation with max-autotune-no-cudagraphs
+                    try:
+                        logger.info("📈 Strategy 3: Minimal compilation with max-autotune-no-cudagraphs...")
+                        compiled_model = torch.compile(
+                            tts_model, 
+                            mode="max-autotune-no-cudagraphs",  # Minimal compilation
+                            fullgraph=False,  # Allow graph breaks
+                            dynamic=True      # Handle variable inputs
+                        )
+                        
+                        # Test the compiled model
+                        logger.info("🧪 Testing compiled model...")
+                        test_entries = tts_model.prepare_script(["test"], padding_between=1)
+                        test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
+                        test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
+                        
+                        with torch.no_grad():
+                            _ = compiled_model.generate([test_entries], [test_attributes])
+                        
+                        tts_model = compiled_model
+                        COMPILATION_ENABLED = True
+                        logger.info("✅ Strategy 3 SUCCESS! Model compiled with max-autotune-no-cudagraphs!")
+                        
+                    except Exception as compile_error_3:
+                        logger.warning(f"⚠️  Strategy 3 failed: {str(compile_error_3)}")
+                        logger.debug(f"Strategy 3 error details: {type(compile_error_3).__name__}: {compile_error_3}")
+                        
+                        # Strategy 4: Try with inductor backend
+                        try:
+                            logger.info("📈 Strategy 4: Compilation with inductor backend...")
+                            compiled_model = torch.compile(
+                                tts_model, 
+                                mode="reduce-overhead",  # Aggressive mode
+                                fullgraph=False,  # Allow graph breaks
+                                dynamic=True,     # Handle variable inputs
+                                backend="inductor"  # Use inductor backend
+                            )
+                            
+                            # Test the compiled model
+                            logger.info("🧪 Testing compiled model...")
+                            test_entries = tts_model.prepare_script(["test"], padding_between=1)
+                            test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
+                            test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
+                            
+                            with torch.no_grad():
+                                _ = compiled_model.generate([test_entries], [test_attributes])
+                            
+                            tts_model = compiled_model
+                            COMPILATION_ENABLED = True
+                            logger.info("✅ Strategy 4 SUCCESS! Model compiled with inductor backend!")
+                            
+                        except Exception as compile_error_4:
+                            logger.warning(f"⚠️  Strategy 4 failed: {str(compile_error_4)}")
+                            logger.debug(f"Strategy 4 error details: {type(compile_error_4).__name__}: {compile_error_4}")
+                            
+                            # Strategy 5: Try with mixed precision
+                            try:
+                                logger.info("📈 Strategy 5: Compilation with mixed precision...")
+                                
+                                # Enable mixed precision
+                                torch.set_autocast_enabled(True)
+                                
+                                compiled_model = torch.compile(
+                                    tts_model, 
+                                    mode="reduce-overhead",  # Aggressive mode
+                                    fullgraph=False,  # Allow graph breaks
+                                    dynamic=True,     # Handle variable inputs
+                                    backend="inductor"  # Use inductor backend
+                                )
+                                
+                                # Test the compiled model with autocast
+                                logger.info("🧪 Testing compiled model with mixed precision...")
+                                test_entries = tts_model.prepare_script(["test"], padding_between=1)
+                                test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
+                                test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
+                                
+                                with torch.autocast(device_type='cuda', dtype=torch.float16):
+                                    with torch.no_grad():
+                                        _ = compiled_model.generate([test_entries], [test_attributes])
+                                
+                                tts_model = compiled_model
+                                COMPILATION_ENABLED = True
+                                logger.info("✅ Strategy 5 SUCCESS! Model compiled with mixed precision!")
+                                
+                            except Exception as compile_error_5:
+                                logger.warning(f"⚠️  Strategy 5 failed: {str(compile_error_5)}")
+                                logger.debug(f"Strategy 5 error details: {type(compile_error_5).__name__}: {compile_error_5}")
+                                
+                                # All strategies failed
+                                logger.warning("❌ All compilation strategies failed. Using uncompiled model.")
+                                COMPILATION_ENABLED = False
+                                
+                                # Detailed error analysis
+                                all_errors = [compile_error_1, compile_error_2, compile_error_3, compile_error_4, compile_error_5]
+                                error_summary = "\n".join([f"Strategy {i+1}: {type(e).__name__}: {str(e)}" for i, e in enumerate(all_errors)])
+                                logger.debug(f"Compilation error summary:\n{error_summary}")
+                                
+                                # Common error patterns
+                                if any("scatter" in str(e).lower() for e in all_errors):
+                                    logger.info("💡 Common issue: Scatter operations not supported in compilation")
+                                elif any("dtype" in str(e).lower() for e in all_errors):
+                                    logger.info("💡 Common issue: Data type mismatches in compilation")
+                                elif any("graph break" in str(e).lower() for e in all_errors):
+                                    logger.info("💡 Common issue: Graph breaks prevent compilation")
+                                elif any("memory" in str(e).lower() for e in all_errors):
+                                    logger.info("💡 Common issue: Memory allocation problems during compilation")
+                                elif any("inductor" in str(e).lower() for e in all_errors):
+                                    logger.info("💡 Common issue: Inductor backend not available or compatible")
+                                else:
+                                    logger.info("💡 Unknown compilation issues. The uncompiled model will work fine.")
         else:
             logger.info("🔧 Model compilation disabled by configuration")
             COMPILATION_ENABLED = False
@@ -937,7 +1072,7 @@ def parse_ssml(ssml_text: str, default_voice: str):
 def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_format: str = "mp3",
                                 apply_cleaning: bool = False, volume_boost: float = 6.0, 
                                 remove_crackles: bool = True, apply_filters: bool = True, 
-                                reduce_noise: bool = True) -> str:
+                                reduce_noise: bool = True, fast_mode: bool = False) -> str:
     """Generate audio with maximum GPU utilization through batching and concurrency"""
     global ENABLE_BATCH_PROCESSING  # Fix scoping issue
     
@@ -945,7 +1080,27 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
         raise RuntimeError("Model is not loaded")
 
     start_time = time.time()
-    logger.info("🎵 Starting HIGH GPU UTILIZATION audio generation...")
+    
+    # Fast mode optimizes for speed while keeping audio cleaning for quality
+    if fast_mode:
+        logger.info("🚀 Starting FAST MODE audio generation (optimized settings with audio cleaning)...")
+        # Fast mode keeps audio cleaning but uses optimized settings
+        # - Larger batch sizes
+        # - More aggressive CUDA settings
+        # - Better memory management
+        # - Audio cleaning for quality
+        
+        # Use larger batch size for fast mode
+        fast_batch_size = min(12, MAX_BATCH_SIZE * 2)  # Double the batch size for fast mode
+        logger.info(f"🚀 Fast mode using batch size: {fast_batch_size}")
+    else:
+        logger.info("🎵 Starting HIGH GPU UTILIZATION audio generation...")
+        fast_batch_size = MAX_BATCH_SIZE
+    
+    # Enable mixed precision for compiled models if available
+    use_mixed_precision = COMPILATION_ENABLED and torch.cuda.is_available()
+    if use_mixed_precision:
+        logger.info("🚀 Using mixed precision for compiled model optimization")
     
     # Use memory pool context for automatic cleanup
     with MemoryPoolContext() as memory_pool:
@@ -975,16 +1130,16 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
             try:
                 if gpu_memory_pool:
                     # Pre-allocate batch-sized tensors
-                    batch_size = MAX_BATCH_SIZE * 1024
+                    batch_size = fast_batch_size * 1024
                     dummy_tensor = allocate_gpu_tensor(batch_size, torch.float32, device)
                     free_gpu_tensor(dummy_tensor)
                 else:
-                    dummy_tensor = torch.zeros(MAX_BATCH_SIZE, 1024, device=device)
+                    dummy_tensor = torch.zeros(fast_batch_size, 1024, device=device)
                     del dummy_tensor
             except:
                 pass  # Continue if allocation fails
         
-        logger.info(f"🚀 Processing {len(text_segments)} text segments in batches of {MAX_BATCH_SIZE}")
+        logger.info(f"🚀 Processing {len(text_segments)} text segments in batches of {fast_batch_size}")
         
         # Process text segments in batches for higher GPU utilization
         text_audio_results = {}
@@ -992,11 +1147,11 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
         
         if batch_processing_enabled and len(text_segments) > 1:
             # BATCH PROCESSING MODE - Higher GPU Utilization
-            for batch_start in range(0, len(text_segments), MAX_BATCH_SIZE):
-                batch_end = min(batch_start + MAX_BATCH_SIZE, len(text_segments))
+            for batch_start in range(0, len(text_segments), fast_batch_size):
+                batch_end = min(batch_start + fast_batch_size, len(text_segments))
                 batch = text_segments[batch_start:batch_end]
                 
-                logger.info(f"🔥 Processing batch {batch_start//MAX_BATCH_SIZE + 1} with {len(batch)} segments (GPU INTENSIVE)")
+                logger.info(f"🔥 Processing batch {batch_start//fast_batch_size + 1} with {len(batch)} segments (GPU INTENSIVE)")
                 
                 # Prepare all batch data
                 batch_entries = []
@@ -1014,35 +1169,84 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 
                 # PARALLEL GPU GENERATION - This maxes out GPU utilization
                 try:
-                    with torch.no_grad():
-                        # Process multiple segments simultaneously
-                        batch_results = []
-                        
-                        # Create multiple CUDA streams for concurrent execution
-                        if torch.cuda.is_available():
-                            streams = [torch.cuda.Stream() for _ in range(min(len(batch), 4))]  # Limit streams
+                    # Use mixed precision context for compiled models
+                    if use_mixed_precision:
+                        with torch.autocast(device_type='cuda', dtype=torch.float16):
+                            with torch.no_grad():
+                                # Process multiple segments simultaneously
+                                batch_results = []
+                                
+                                # Create multiple CUDA streams for concurrent execution
+                                if torch.cuda.is_available():
+                                    # Use more streams for fast mode
+                                    max_streams = 12 if fast_mode else 8
+                                    streams = [torch.cuda.Stream() for _ in range(min(len(batch), max_streams))]
+                                    
+                                    # Launch parallel generations
+                                    for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                                        stream_idx = i % len(streams)  # Cycle through available streams
+                                        with torch.cuda.stream(streams[stream_idx]):
+                                            result = tts_model.generate([entries], [attributes])
+                                            batch_results.append((batch_indices[i], result))
+                                    
+                                    # Synchronize all streams
+                                    for stream in streams:
+                                        stream.synchronize()
+                                else:
+                                    # CPU fallback
+                                    for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                                        result = tts_model.generate([entries], [attributes])
+                                        batch_results.append((batch_indices[i], result))
+                    else:
+                        # Standard precision for uncompiled models
+                        with torch.no_grad():
+                            # Process multiple segments simultaneously
+                            batch_results = []
                             
-                            # Launch parallel generations
-                            for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
-                                stream_idx = i % len(streams)  # Cycle through available streams
-                                with torch.cuda.stream(streams[stream_idx]):
+                            # Create multiple CUDA streams for concurrent execution
+                            if torch.cuda.is_available():
+                                # Use more streams for fast mode
+                                max_streams = 12 if fast_mode else 8
+                                streams = [torch.cuda.Stream() for _ in range(min(len(batch), max_streams))]
+                                
+                                # Launch parallel generations
+                                for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
+                                    stream_idx = i % len(streams)  # Cycle through available streams
+                                    with torch.cuda.stream(streams[stream_idx]):
+                                        result = tts_model.generate([entries], [attributes])
+                                        batch_results.append((batch_indices[i], result))
+                                
+                                # Synchronize all streams
+                                for stream in streams:
+                                    stream.synchronize()
+                            else:
+                                # CPU fallback
+                                for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
                                     result = tts_model.generate([entries], [attributes])
                                     batch_results.append((batch_indices[i], result))
-                            
-                            # Synchronize all streams
-                            for stream in streams:
-                                stream.synchronize()
-                        else:
-                            # CPU fallback
-                            for i, (entries, attributes) in enumerate(zip(batch_entries, batch_attributes)):
-                                result = tts_model.generate([entries], [attributes])
-                                batch_results.append((batch_indices[i], result))
-                        
-                        logger.info(f"✅ Batch completed with {len(batch_results)} parallel generations")
-                        
-                        # Decode all results (keeping on GPU as long as possible)
-                        for idx, result in batch_results:
-                            try:
+                    
+                    logger.info(f"✅ Batch completed with {len(batch_results)} parallel generations")
+                    
+                    # Decode all results (keeping on GPU as long as possible)
+                    for idx, result in batch_results:
+                        try:
+                            # Use mixed precision for decoding if compiled
+                            if use_mixed_precision:
+                                with torch.autocast(device_type='cuda', dtype=torch.float16):
+                                    with tts_model.mimi.streaming(1), torch.no_grad():
+                                        pcms = []
+                                        for frame in result.frames[tts_model.delay_steps:]:
+                                            decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                                            pcm = torch.clamp(decoded, -1, 1)
+                                            pcms.append(pcm[0, 0])
+                                        
+                                        # Keep on GPU until final transfer
+                                        pcm_tensor = torch.cat(pcms, dim=-1)
+                                        pcm_data = pcm_tensor.cpu().numpy()
+                                        
+                                        # Store result
+                                        text_audio_results[idx] = pcm_data
+                            else:
                                 with tts_model.mimi.streaming(1), torch.no_grad():
                                     pcms = []
                                     for frame in result.frames[tts_model.delay_steps:]:
@@ -1057,10 +1261,10 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                                     # Store result
                                     text_audio_results[idx] = pcm_data
                                     
-                            except Exception as decode_error:
-                                logger.error(f"Batch decode failed for segment {idx}: {decode_error}")
-                                continue
-                                
+                        except Exception as decode_error:
+                            logger.error(f"Batch decode failed for segment {idx}: {decode_error}")
+                            continue
+                            
                 except Exception as batch_error:
                     logger.error(f"Batch processing failed: {batch_error}")
                     # Fallback to sequential processing
@@ -1079,19 +1283,36 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
                 
                 try:
-                    with torch.no_grad():
-                        result = tts_model.generate([entries], [attributes])
-                    
-                    with tts_model.mimi.streaming(1), torch.no_grad():
-                        pcms = []
-                        for frame in result.frames[tts_model.delay_steps:]:
-                            decoded = tts_model.mimi.decode(frame[:, 1:, :])
-                            pcm = torch.clamp(decoded, -1, 1)
-                            pcms.append(pcm[0, 0])
+                    # Use mixed precision for compiled models
+                    if use_mixed_precision:
+                        with torch.autocast(device_type='cuda', dtype=torch.float16):
+                            with torch.no_grad():
+                                result = tts_model.generate([entries], [attributes])
+                            
+                            with tts_model.mimi.streaming(1), torch.no_grad():
+                                pcms = []
+                                for frame in result.frames[tts_model.delay_steps:]:
+                                    decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                                    pcm = torch.clamp(decoded, -1, 1)
+                                    pcms.append(pcm[0, 0])
+                                
+                                pcm_tensor = torch.cat(pcms, dim=-1)
+                                pcm_data = pcm_tensor.cpu().numpy()
+                                text_audio_results[idx] = pcm_data
+                    else:
+                        with torch.no_grad():
+                            result = tts_model.generate([entries], [attributes])
                         
-                        pcm_tensor = torch.cat(pcms, dim=-1)
-                        pcm_data = pcm_tensor.cpu().numpy()
-                        text_audio_results[idx] = pcm_data
+                        with tts_model.mimi.streaming(1), torch.no_grad():
+                            pcms = []
+                            for frame in result.frames[tts_model.delay_steps:]:
+                                decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                                pcm = torch.clamp(decoded, -1, 1)
+                                pcms.append(pcm[0, 0])
+                            
+                            pcm_tensor = torch.cat(pcms, dim=-1)
+                            pcm_data = pcm_tensor.cpu().numpy()
+                            text_audio_results[idx] = pcm_data
                         
                     segment_time = time.time() - segment_start
                     logger.debug(f"⏱️  Sequential segment completed in {segment_time:.2f}s")
@@ -1140,15 +1361,19 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 
                 # Split audio into chunks for concurrent processing
                 audio_duration = len(final_audio)
+                # Use more chunks for fast mode
+                num_chunks = 8 if fast_mode else 4
                 if audio_duration > 4000:  # Only split if audio is longer than 4 seconds
-                    chunk_size = audio_duration // 4  # 4 concurrent chunks
+                    chunk_size = audio_duration // num_chunks  # More concurrent chunks for fast mode
                     chunks = [final_audio[i:i+chunk_size] for i in range(0, audio_duration, chunk_size)]
                     
                     # Process chunks concurrently
                     cleaned_chunks = []
                     
                     if torch.cuda.is_available():
-                        streams = [torch.cuda.Stream() for _ in range(min(len(chunks), 4))]
+                        # Use more streams for fast mode
+                        max_cleaning_streams = 8 if fast_mode else 4
+                        streams = [torch.cuda.Stream() for _ in range(min(len(chunks), max_cleaning_streams))]
                         
                         for i, chunk in enumerate(chunks):
                             stream_idx = i % len(streams)
@@ -1234,6 +1459,7 @@ class TTSRequest(BaseModel):
     remove_crackles: bool = True
     apply_filters: bool = True
     reduce_noise: bool = True
+    fast_mode: bool = False  # Skip audio cleaning for maximum speed
 
 class AudioCleaningRequest(BaseModel):
     volume_boost: float = 6.0
@@ -1287,7 +1513,8 @@ async def tts_endpoint(request: TTSRequest):
             volume_boost=request.volume_boost,
             remove_crackles=request.remove_crackles,
             apply_filters=request.apply_filters,
-            reduce_noise=request.reduce_noise
+            reduce_noise=request.reduce_noise,
+            fast_mode=request.fast_mode
         )
     
     try:
