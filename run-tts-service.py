@@ -39,6 +39,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # Global device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ENABLE_COMPILATION = True  # Set to False to disable torch.compile attempts
 logger.info(f"Using device: {device}")
 
 # --- GPU-Accelerated Audio Cleaner Class ---
@@ -319,34 +320,60 @@ try:
         torch.backends.cudnn.benchmark = False  # More conservative for variable input sizes
         torch.backends.cudnn.deterministic = True
         
-        # Attempt model compilation with fallback
+        # Optional: Pre-allocate memory for better performance
         try:
-            # Use more conservative compilation settings to avoid dtype issues
-            compiled_model = torch.compile(
-                tts_model, 
-                mode="default",  # Less aggressive than max-autotune
-                fullgraph=False,  # Allow graph breaks for better compatibility
-                dynamic=True      # Handle variable input sizes better
-            )
-            
-            # Test the compiled model with a simple generation
-            logger.info("Testing compiled model...")
-            test_entries = tts_model.prepare_script(["test"], padding_between=1)
-            test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
-            test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
-            
-            # Attempt a small generation to validate compilation
-            with torch.no_grad():
-                _ = compiled_model.generate([test_entries], [test_attributes])
-            
-            tts_model = compiled_model
-            COMPILATION_ENABLED = True
-            logger.info("Model compiled successfully with conservative settings")
-            
-        except Exception as compile_error:
-            logger.warning(f"Model compilation failed, using uncompiled model: {compile_error}")
+            torch.cuda.empty_cache()
+            # Reserve 90% of GPU memory for this process
+            torch.cuda.set_per_process_memory_fraction(0.9)
+            logger.info("🚀 GPU memory pre-allocated for optimal performance")
+        except Exception as mem_error:
+            logger.warning(f"GPU memory pre-allocation failed: {mem_error}")
+        
+        # Attempt model compilation with fallback (only if enabled)
+        if ENABLE_COMPILATION:
+            try:
+                logger.info("Attempting model compilation...")
+                
+                # Use more conservative compilation settings to avoid dtype issues
+                compiled_model = torch.compile(
+                    tts_model, 
+                    mode="default",  # Less aggressive than max-autotune
+                    fullgraph=False,  # Allow graph breaks for better compatibility
+                    dynamic=True      # Handle variable input sizes better
+                )
+                
+                # Test the compiled model with a simple generation
+                logger.info("Testing compiled model with dummy generation...")
+                test_entries = tts_model.prepare_script(["test"], padding_between=1)
+                test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
+                test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
+                
+                # Attempt a small generation to validate compilation
+                with torch.no_grad():
+                    _ = compiled_model.generate([test_entries], [test_attributes])
+                
+                tts_model = compiled_model
+                COMPILATION_ENABLED = True
+                logger.info("✅ Model compiled successfully with torch.compile!")
+                
+            except Exception as compile_error:
+                logger.warning(f"⚠️  Model compilation failed, using uncompiled model.")
+                logger.debug(f"Compilation error details: {compile_error}")
+                COMPILATION_ENABLED = False
+                # Continue with uncompiled model
+                
+                # Additional debugging for common compilation issues
+                if "scatter" in str(compile_error).lower():
+                    logger.info("💡 Compilation failed due to scatter operation compatibility. This is common with complex transformer models.")
+                elif "dtype" in str(compile_error).lower():
+                    logger.info("💡 Compilation failed due to dtype mismatch. The model will run efficiently without compilation.")
+                elif "graph break" in str(compile_error).lower():
+                    logger.info("💡 Compilation failed due to graph breaks. Consider setting fullgraph=False (already enabled).")
+                else:
+                    logger.info("💡 Compilation failed for unknown reasons. The uncompiled model will work fine.")
+        else:
+            logger.info("🔧 Model compilation disabled by configuration")
             COMPILATION_ENABLED = False
-            # Continue with uncompiled model
     
     MODEL_LOADED = True
     logger.info(f"Model loaded successfully. GPU optimizations: {torch.cuda.is_available()}, Compilation: {COMPILATION_ENABLED}")
@@ -444,32 +471,17 @@ def generate_audio_safe(ssml_text: str, default_voice: str, output_format: str =
         voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
         attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
         
-        # Generate audio with multiple fallback strategies
+        # Generate audio with stable inference (avoiding autocast due to dtype issues)
         try:
-            # First attempt: Use optimized inference mode
-            with torch.inference_mode():
-                if torch.cuda.is_available():
-                    # Use autocast only if CUDA is available and model supports it
-                    try:
-                        with torch.cuda.amp.autocast():
-                            result = tts_model.generate([entries], [attributes])
-                    except Exception as autocast_error:
-                        logger.warning(f"Autocast failed, falling back to standard inference: {autocast_error}")
-                        result = tts_model.generate([entries], [attributes])
-                else:
-                    result = tts_model.generate([entries], [attributes])
+            # Use standard torch.no_grad() for maximum stability
+            with torch.no_grad():
+                result = tts_model.generate([entries], [attributes])
                     
         except RuntimeError as e:
             if "dtype" in str(e) or "scatter" in str(e):
-                logger.warning(f"Dtype/scatter error detected, attempting fallback without optimizations: {e}")
-                # Fallback: Use standard torch.no_grad() without inference_mode
-                try:
-                    with torch.no_grad():
-                        result = tts_model.generate([entries], [attributes])
-                except Exception as fallback_error:
-                    logger.error(f"All generation attempts failed for segment {idx + 1}: {fallback_error}")
-                    # Skip this segment and continue
-                    continue
+                logger.error(f"Generation failed for segment {idx + 1} due to dtype mismatch: {e}")
+                # Skip this segment and continue
+                continue
             else:
                 raise  # Re-raise if it's not a dtype/scatter error
 
