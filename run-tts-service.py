@@ -294,6 +294,8 @@ def clean_audio_segment_gpu(audio_segment, volume_boost=6, remove_crackles=True,
 # --- Model Loading with GPU Optimization ---
 MODEL_LOADED = False
 tts_model = None
+COMPILATION_ENABLED = False
+
 try:
     MODEL_REPO = "kyutai/tts-1.6b-en_fr"
     VOICE_REPO = "kyutai/tts-voices"
@@ -311,21 +313,44 @@ try:
     )
     tts_model.voice_repo = VOICE_REPO
     
-    # Enable optimizations if available
+    # Enable basic CUDA optimizations if available
     if torch.cuda.is_available():
-        # Enable CUDA optimizations
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
+        # Enable CUDA optimizations (conservative settings for stability)
+        torch.backends.cudnn.benchmark = False  # More conservative for variable input sizes
+        torch.backends.cudnn.deterministic = True
         
-        # Compile model for better performance (PyTorch 2.0+)
+        # Attempt model compilation with fallback
         try:
-            tts_model = torch.compile(tts_model, mode="max-autotune")
-            logger.info("Model compiled with torch.compile for enhanced performance")
-        except Exception as e:
-            logger.warning(f"torch.compile not available: {e}")
+            # Use more conservative compilation settings to avoid dtype issues
+            compiled_model = torch.compile(
+                tts_model, 
+                mode="default",  # Less aggressive than max-autotune
+                fullgraph=False,  # Allow graph breaks for better compatibility
+                dynamic=True      # Handle variable input sizes better
+            )
+            
+            # Test the compiled model with a simple generation
+            logger.info("Testing compiled model...")
+            test_entries = tts_model.prepare_script(["test"], padding_between=1)
+            test_voice_path = tts_model.get_voice_path(VOICE_OPTIONS[DEFAULT_VOICE])
+            test_attributes = tts_model.make_condition_attributes([test_voice_path], cfg_coef=2.5)
+            
+            # Attempt a small generation to validate compilation
+            with torch.no_grad():
+                _ = compiled_model.generate([test_entries], [test_attributes])
+            
+            tts_model = compiled_model
+            COMPILATION_ENABLED = True
+            logger.info("Model compiled successfully with conservative settings")
+            
+        except Exception as compile_error:
+            logger.warning(f"Model compilation failed, using uncompiled model: {compile_error}")
+            COMPILATION_ENABLED = False
+            # Continue with uncompiled model
     
     MODEL_LOADED = True
-    logger.info("Model loaded successfully with GPU optimizations.")
+    logger.info(f"Model loaded successfully. GPU optimizations: {torch.cuda.is_available()}, Compilation: {COMPILATION_ENABLED}")
+    
 except Exception as e:
     MODEL_LOADED = False
     logger.exception(f"FATAL: Error loading model: {e}")
@@ -394,12 +419,12 @@ def parse_ssml(ssml_text: str, default_voice: str):
     logger.info(f"Parsed into {len(segments)} segments.")
     return segments
 
-# --- Optimized Audio Generation ---
-@torch.inference_mode()  # Disable gradient computation for inference
-def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3",
-                  apply_cleaning: bool = False, volume_boost: float = 6.0, 
-                  remove_crackles: bool = True, apply_filters: bool = True, 
-                  reduce_noise: bool = True) -> str:
+# --- Optimized Audio Generation with Error Handling ---
+def generate_audio_safe(ssml_text: str, default_voice: str, output_format: str = "mp3",
+                       apply_cleaning: bool = False, volume_boost: float = 6.0, 
+                       remove_crackles: bool = True, apply_filters: bool = True, 
+                       reduce_noise: bool = True) -> str:
+    """Generate audio with comprehensive error handling and fallbacks"""
     if not MODEL_LOADED:
         raise RuntimeError("Model is not loaded")
 
@@ -407,7 +432,7 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
     segments = parse_ssml(ssml_text, default_voice)
     output_audio_segments = []
 
-    # Process segments with GPU optimizations
+    # Process segments with GPU optimizations and error handling
     for idx, (voice, content) in enumerate(segments):
         logger.info(f"Processing segment {idx + 1}/{len(segments)}: Voice='{voice}'")
         if voice == "PAUSE":
@@ -419,27 +444,60 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
         voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
         attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
         
-        # Generate audio on GPU
-        with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
-            result = tts_model.generate([entries], [attributes])
+        # Generate audio with multiple fallback strategies
+        try:
+            # First attempt: Use optimized inference mode
+            with torch.inference_mode():
+                if torch.cuda.is_available():
+                    # Use autocast only if CUDA is available and model supports it
+                    try:
+                        with torch.cuda.amp.autocast():
+                            result = tts_model.generate([entries], [attributes])
+                    except Exception as autocast_error:
+                        logger.warning(f"Autocast failed, falling back to standard inference: {autocast_error}")
+                        result = tts_model.generate([entries], [attributes])
+                else:
+                    result = tts_model.generate([entries], [attributes])
+                    
+        except RuntimeError as e:
+            if "dtype" in str(e) or "scatter" in str(e):
+                logger.warning(f"Dtype/scatter error detected, attempting fallback without optimizations: {e}")
+                # Fallback: Use standard torch.no_grad() without inference_mode
+                try:
+                    with torch.no_grad():
+                        result = tts_model.generate([entries], [attributes])
+                except Exception as fallback_error:
+                    logger.error(f"All generation attempts failed for segment {idx + 1}: {fallback_error}")
+                    # Skip this segment and continue
+                    continue
+            else:
+                raise  # Re-raise if it's not a dtype/scatter error
 
         # Decode audio efficiently
-        with tts_model.mimi.streaming(1), torch.no_grad():
-            pcms = []
-            for frame in result.frames[tts_model.delay_steps:]:
-                decoded = tts_model.mimi.decode(frame[:, 1:, :])
-                pcm = torch.clamp(decoded, -1, 1).cpu().numpy()[0, 0]
-                pcms.append(pcm)
-            pcm_data = np.concatenate(pcms, axis=-1)
+        try:
+            with tts_model.mimi.streaming(1), torch.no_grad():
+                pcms = []
+                for frame in result.frames[tts_model.delay_steps:]:
+                    decoded = tts_model.mimi.decode(frame[:, 1:, :])
+                    pcm = torch.clamp(decoded, -1, 1).cpu().numpy()[0, 0]
+                    pcms.append(pcm)
+                pcm_data = np.concatenate(pcms, axis=-1)
+        except Exception as decode_error:
+            logger.error(f"Audio decoding failed for segment {idx + 1}: {decode_error}")
+            continue
 
         # Create temporary wav file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
-            sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
-            wav_path = wav_fp.name
-        
-        segment_audio = AudioSegment.from_wav(wav_path)
-        output_audio_segments.append(segment_audio)
-        os.remove(wav_path)
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_fp:
+                sphn.write_wav(wav_fp.name, pcm_data, tts_model.mimi.sample_rate)
+                wav_path = wav_fp.name
+            
+            segment_audio = AudioSegment.from_wav(wav_path)
+            output_audio_segments.append(segment_audio)
+            os.remove(wav_path)
+        except Exception as file_error:
+            logger.error(f"File processing failed for segment {idx + 1}: {file_error}")
+            continue
     
     if not output_audio_segments:
         logger.warning("No audio was generated, returning empty audio file.")
@@ -453,14 +511,17 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
     
     # Apply GPU-accelerated cleaning if requested
     if apply_cleaning:
-        logger.info("Applying GPU-accelerated cleaning to final audio...")
-        final_audio = clean_audio_segment_gpu(
-            final_audio,
-            volume_boost=volume_boost,
-            remove_crackles=remove_crackles,
-            apply_filters=apply_filters,
-            reduce_noise=reduce_noise
-        )
+        try:
+            logger.info("Applying GPU-accelerated cleaning to final audio...")
+            final_audio = clean_audio_segment_gpu(
+                final_audio,
+                volume_boost=volume_boost,
+                remove_crackles=remove_crackles,
+                apply_filters=apply_filters,
+                reduce_noise=reduce_noise
+            )
+        except Exception as cleaning_error:
+            logger.warning(f"GPU cleaning failed, audio will be returned without cleaning: {cleaning_error}")
     
     # Export based on requested format
     if output_format.lower() == "wav":
@@ -473,6 +534,9 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
             final_audio.export(mp3_fp.name, format="mp3", bitrate="320k")
             logger.info(f"Final audio successfully exported to {mp3_fp.name} as MP3")
             return mp3_fp.name
+
+# Alias for backward compatibility
+generate_audio = generate_audio_safe
 
 # --- Pydantic Models (unchanged) ---
 class TTSRequest(BaseModel):
@@ -602,8 +666,9 @@ def health_check():
         "model_loaded": MODEL_LOADED,
         "device": str(device),
         "cuda_available": torch.cuda.is_available(),
+        "compilation_enabled": COMPILATION_ENABLED if MODEL_LOADED else False,
         "gpu_memory": f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB" if torch.cuda.is_available() else "N/A",
-        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration"]
+        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration", "error_recovery"]
     }
 
 @app.get("/")
