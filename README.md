@@ -2,6 +2,8 @@
 
 A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Kyutai TTS. Features advanced GPU memory management, batch processing, audio cleaning, and SSML support.
 
+> **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
+
 ## 🚀 Features
 
 ### Core Features
@@ -25,17 +27,18 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 
 ### System Requirements
 - **OS**: Linux (tested on Ubuntu 22.04)
-- **GPU**: NVIDIA GPU with CUDA support (8GB+ VRAM recommended)
+- **GPU**: AMD GPU with ROCm support (tested on AMD Strix Halo GFX1150)
 - **RAM**: 16GB+ system memory
 - **Storage**: 10GB+ free space for models and cache
+- **Environment**: `export HSA_OVERRIDE_GFX_VERSION=11.0.0` in ~/.bashrc
 
 ### Software Requirements
 - **Python**: 3.8+
-- **CUDA**: 11.8+ (compatible with PyTorch)
-- **PyTorch**: 2.0+ with CUDA support
+- **ROCm**: 6.3+ (compatible with PyTorch)
+- **PyTorch**: 2.7.1+ with ROCm support
 - **FastAPI**: Web framework
 - **Uvicorn**: ASGI server
-- **Kyutai TTS**: Text-to-speech model
+- **TTS Model**: Kyutai TTS or alternative TTS library
 
 ## 🛠️ Installation
 
@@ -65,9 +68,16 @@ source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-### 4. Verify GPU Setup
+### 4. Environment Setup (Required for AMD GPUs)
 ```bash
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU count: {torch.cuda.device_count()}')"
+# Add to your ~/.bashrc file for AMD GPU compatibility
+echo 'export HSA_OVERRIDE_GFX_VERSION=11.0.0' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 5. Verify GPU Setup
+```bash
+python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'GPU count: {torch.cuda.device_count()}')"
 ```
 
 ## 🚀 Quick Start
@@ -238,7 +248,7 @@ export ENABLE_AUDIO_CLEANING=true
 
 ## 📊 Performance Metrics
 
-### Typical Performance
+### Typical Performance (AMD Strix Halo GFX1150)
 - **Simple Text (50 words)**: ~5-8 seconds
 - **Complex SSML (200 words)**: ~15-25 seconds
 - **Fast Mode**: 20-30% faster than normal mode
@@ -311,6 +321,9 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 # Check dependencies
 pip list | grep torch
+
+# Verify HSA environment variable
+echo $HSA_OVERRIDE_GFX_VERSION
 ```
 
 ### Log Analysis

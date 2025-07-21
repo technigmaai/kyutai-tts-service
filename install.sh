@@ -39,14 +39,9 @@ source .venv/bin/activate
 echo "⬆️  Upgrading pip..."
 pip install --upgrade pip
 
-# Install PyTorch with CUDA support
-if [ -z "$CUDA_INDEX" ]; then
-    echo "🚀 Installing PyTorch with CUDA support..."
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-else
-    echo "🚀 Installing PyTorch (CPU only)..."
-    pip install torch torchvision torchaudio
-fi
+# Install PyTorch with ROCm support (matching PyTorch2 environment)
+echo "🚀 Installing PyTorch with ROCm support..."
+pip install torch==2.7.1+rocm6.3 torchvision==0.22.1+rocm6.3 torchaudio==2.7.1+rocm6.3 --index-url https://download.pytorch.org/whl/rocm6.3
 
 # Install other dependencies
 echo "📚 Installing other dependencies..."
