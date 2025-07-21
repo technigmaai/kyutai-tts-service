@@ -1,6 +1,10 @@
 # Requirements Analysis for TTS Service
 
+> **🎯 AMD GPU Focus**: This service is specifically optimized and tested for AMD GPUs using ROCm, not NVIDIA GPUs with CUDA.
+
 ## 🖥️ Tested Hardware
+- **OS**: Ubuntu 24.04
+- **Python**: 3.12.10
 - **GPU**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150)
 - **Platform**: ROCm 6.3
 - **Environment**: PyTorch2 (.venv)
@@ -87,6 +91,7 @@ The PyTorch2 environment uses **ROCm** instead of **CUDA**:
 - **ROCm**: AMD's GPU computing platform (tested on AMD Strix Halo GFX1150)
 - **CUDA**: NVIDIA's GPU computing platform
 - **Compatibility**: ROCm is compatible with AMD GPUs, CUDA with NVIDIA GPUs
+- **Focus**: This service is specifically designed and tested for AMD GPUs with ROCm
 
 ## 📋 Recommendations
 

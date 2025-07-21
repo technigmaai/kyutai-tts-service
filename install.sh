@@ -39,13 +39,13 @@ source .venv/bin/activate
 echo "⬆️  Upgrading pip..."
 pip install --upgrade pip
 
-# Install PyTorch with ROCm support (as tested)
-echo "🚀 Installing PyTorch with ROCm support..."
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
-
 # Install other dependencies
 echo "📚 Installing other dependencies..."
 pip install -r requirements.txt
+
+# Install PyTorch with ROCm support (as tested)
+echo "🚀 Installing PyTorch with ROCm support..."
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 
 # Verify installation
 echo "✅ Verifying installation..."

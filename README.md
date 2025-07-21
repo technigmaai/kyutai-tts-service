@@ -7,7 +7,7 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 ## 🚀 Features
 
 ### Core Features
-- **GPU-Accelerated TTS**: Leverages NVIDIA GPUs for fast audio generation
+- **GPU-Accelerated TTS**: Leverages AMD GPUs with ROCm for fast audio generation
 - **Advanced Memory Management**: Sophisticated GPU memory pooling and tensor reuse
 - **Batch Processing**: Concurrent processing of multiple text segments
 - **Audio Cleaning Pipeline**: GPU-accelerated noise reduction and audio enhancement
@@ -17,8 +17,8 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 - **Real-time Monitoring**: GPU/CPU usage and memory tracking
 
 ### Performance Optimizations
-- **CUDA Optimizations**: Flash attention, TF32, memory-efficient operations
-- **Parallel Processing**: Multiple CUDA streams for concurrent operations
+- **ROCm Optimizations**: Flash attention, TF32, memory-efficient operations
+- **Parallel Processing**: Multiple GPU streams for concurrent operations
 - **Adaptive Memory Management**: Dynamic tensor allocation based on usage patterns
 - **Fast Mode**: Aggressive optimizations for speed-critical applications
 - **Request Queue Management**: Limits concurrent requests to prevent overload
@@ -26,16 +26,17 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 ## 📋 Requirements
 
 ### System Requirements
-- **OS**: Linux (tested on Ubuntu 22.04)
+- **OS**: Ubuntu 24.04 (tested)
+- **Python**: 3.12.10 (tested)
 - **GPU**: AMD GPU with ROCm support (tested on AMD Strix Halo GFX1150)
 - **RAM**: 16GB+ system memory
 - **Storage**: 10GB+ free space for models and cache
 - **Environment**: `export HSA_OVERRIDE_GFX_VERSION=11.0.0` in ~/.bashrc
 
 ### Software Requirements
-- **Python**: 3.8+
-- **ROCm**: 6.3+ (compatible with PyTorch)
-- **PyTorch**: 2.7.1+ with ROCm support
+- **Python**: 3.12.10 (tested)
+- **ROCm**: 6.3+ (AMD GPU computing platform)
+- **PyTorch**: 2.7.1+ with ROCm support (AMD GPU optimized)
 - **FastAPI**: Web framework
 - **Uvicorn**: ASGI server
 - **TTS Model**: Kyutai TTS or alternative TTS library
@@ -44,7 +45,7 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 
 ### 1. Clone the Repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/technigmaai/tts-service.git
 cd tts-service
 ```
 
@@ -64,12 +65,11 @@ source .venv/bin/activate  # Linux/Mac
 # or
 .venv\Scripts\activate     # Windows
 
-# Install PyTorch with ROCm support (as tested)
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
-
-# Install other dependencies
+# Install other dependencies (PyTorch packages are excluded from requirements.txt)
 pip install -r requirements.txt
 ```
+# Install PyTorch with ROCm support (as tested)
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 
 ### 4. Environment Setup (Required for AMD GPUs)
 ```bash

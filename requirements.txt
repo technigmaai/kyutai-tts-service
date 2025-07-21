@@ -1,8 +1,11 @@
 # Core PyTorch with ROCm support (tested installation)
-# Install with: pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
-torch>=2.7.1+rocm6.3
-torchvision>=0.22.1+rocm6.3
-torchaudio>=2.7.1+rocm6.3
+# IMPORTANT: Install PyTorch separately with ROCm support:
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+# 
+# The following lines are commented out because pip doesn't support ROCm suffixes
+# torch>=2.7.1+rocm6.3
+# torchvision>=0.22.1+rocm6.3
+# torchaudio>=2.7.1+rocm6.3
 
 # Web framework and server
 fastapi>=0.116.1
@@ -17,10 +20,15 @@ pydub>=0.25.1
 librosa>=0.11.0
 numpy>=1.26.4
 scipy>=1.16.0
+sphn>=0.1.0
+soundfile>=0.12.0
 
 # Additional utilities
 requests>=2.32.4
 python-multipart>=0.0.20
+
+# TTS Model dependencies
+moshi==0.2.11
 
 # Note: kyutai-tts is not available in the PyTorch2 environment
 # You may need to install it separately or use an alternative TTS library
