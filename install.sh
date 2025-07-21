@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # GPU-Optimized TTS Service Installation Script
-# This script sets up the TTS service with all dependencies
+# This script sets up the TTS service with all dependencies including ROCm
 
 set -e  # Exit on any error
 
@@ -10,12 +10,13 @@ echo "=========================================="
 echo ""
 echo "This script will:"
 echo "1. Check system requirements (Python, existing venv)"
-echo "2. Create a Python virtual environment (.venv)"
-echo "3. Check GPU support (ROCm for AMD GPUs)"
-echo "4. Install PyTorch with ROCm support"
-echo "5. Install all required dependencies"
-echo "6. Verify the installation"
-echo "7. Optionally start the service"
+echo "2. Optionally install ROCm drivers (for AMD GPU acceleration)"
+echo "3. Create a Python virtual environment (.venv)"
+echo "4. Check GPU support (ROCm for AMD GPUs)"
+echo "5. Install PyTorch with ROCm support"
+echo "6. Install all required dependencies"
+echo "7. Verify the installation"
+echo "8. Optionally start the service"
 echo ""
 echo "Tested on: Ubuntu 24.04, Python 3.12.10, AMD Strix Halo GPU"
 echo ""
@@ -33,6 +34,61 @@ fi
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "✅ Python version: $PYTHON_VERSION"
 
+# Check if ROCm is installed
+echo "🔍 Checking ROCm installation..."
+if command -v rocminfo &> /dev/null; then
+    echo "✅ ROCm is already installed!"
+    rocminfo
+else
+    echo "⚠️  ROCm is not installed. This is required for AMD GPU acceleration."
+    read -p "Do you want to install ROCm now? (requires sudo) (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "🔧 Step 2: Installing ROCm drivers..."
+        echo "----------------------------------------"
+        
+        # Check if running as root
+        if [ "$EUID" -ne 0 ]; then
+            echo "⚠️  ROCm installation requires root privileges."
+            echo "Please run: sudo ./install.sh"
+            exit 1
+        fi
+        
+        echo "📦 Installing ROCm..."
+        
+        # Add ROCm repository
+        echo "Adding ROCm repository..."
+        wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | gpg --dearmor | tee /usr/share/keyrings/rocm-keyring.gpg > /dev/null
+        echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/rocm-keyring.gpg] https://repo.radeon.com/rocm/apt/debian jammy main' | tee /etc/apt/sources.list.d/rocm.list
+        
+        # Update package list
+        apt update
+        
+        # Install ROCm
+        echo "Installing ROCm packages..."
+        apt install -y rocm-hip-sdk
+        
+        # Install additional ROCm packages
+        echo "Installing additional ROCm packages..."
+        apt install -y rocm-utils rocm-dev
+        
+        echo ""
+        echo "✅ ROCm installation completed!"
+        echo ""
+        echo "🔍 Verifying ROCm installation..."
+        if command -v rocminfo &> /dev/null; then
+            echo "✅ ROCm is now installed!"
+            rocminfo
+        else
+            echo "❌ ROCm installation may have failed."
+            echo "Please check the error messages above."
+        fi
+    else
+        echo "ℹ️  Skipping ROCm installation. Service will run in CPU mode."
+    fi
+fi
+
 # Check if virtual environment already exists
 if [ -d ".venv" ]; then
     echo "⚠️  Virtual environment '.venv' already exists."
@@ -49,7 +105,7 @@ fi
 
 # Create virtual environment
 echo ""
-echo "📦 Step 2: Creating virtual environment..."
+echo "📦 Step 3: Creating virtual environment..."
 echo "----------------------------------------"
 
 if [ ! -d ".venv" ]; then
@@ -83,7 +139,7 @@ fi
 
 # Check if ROCm is available (after virtual environment is activated)
 echo ""
-echo "🔍 Step 3: Checking GPU support..."
+echo "🔍 Step 4: Checking GPU support..."
 echo "----------------------------------------"
 echo "🔍 Checking ROCm availability..."
 if python -c "import torch; print('ROCm available:', torch.cuda.is_available())" 2>/dev/null; then
@@ -95,7 +151,7 @@ fi
 
 # Upgrade pip
 echo ""
-echo "⬆️  Step 4: Installing dependencies..."
+echo "⬆️  Step 5: Installing dependencies..."
 echo "----------------------------------------"
 echo "⬆️  Upgrading pip..."
 pip install --upgrade pip
@@ -135,7 +191,7 @@ fi
 
 # Verify installation
 echo ""
-echo "✅ Step 5: Verifying installation..."
+echo "✅ Step 6: Verifying installation..."
 echo "----------------------------------------"
 echo "✅ Verifying installation..."
 

@@ -79,11 +79,11 @@ source ~/.bashrc
 ```
 
 ### 5. ROCm Installation (Required for GPU Acceleration)
-If you encounter ROCm library errors, install ROCm drivers:
+The installer will automatically check for ROCm and offer to install it if needed. If you encounter ROCm library errors:
 
 ```bash
-# Option 1: Use the provided script (recommended)
-sudo ./install_rocm.sh
+# Option 1: Use the comprehensive installer (recommended)
+sudo ./install.sh
 
 # Option 2: Manual installation
 # Follow the official guide: https://rocmdocs.amd.com/en/latest/deploy/linux/prerequisites.html
