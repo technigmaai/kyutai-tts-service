@@ -78,7 +78,18 @@ echo 'export HSA_OVERRIDE_GFX_VERSION=11.0.0' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### 5. Verify GPU Setup
+### 5. ROCm Installation (Required for GPU Acceleration)
+If you encounter ROCm library errors, install ROCm drivers:
+
+```bash
+# Option 1: Use the provided script (recommended)
+sudo ./install_rocm.sh
+
+# Option 2: Manual installation
+# Follow the official guide: https://rocmdocs.amd.com/en/latest/deploy/linux/prerequisites.html
+```
+
+### 6. Verify GPU Setup
 ```bash
 python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'GPU count: {torch.cuda.device_count()}')"
 ```

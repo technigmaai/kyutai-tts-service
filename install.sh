@@ -7,8 +7,23 @@ set -e  # Exit on any error
 
 echo "🎵 GPU-Optimized TTS Service Installation"
 echo "=========================================="
+echo ""
+echo "This script will:"
+echo "1. Check system requirements (Python, existing venv)"
+echo "2. Create a Python virtual environment (.venv)"
+echo "3. Check GPU support (ROCm for AMD GPUs)"
+echo "4. Install PyTorch with ROCm support"
+echo "5. Install all required dependencies"
+echo "6. Verify the installation"
+echo "7. Optionally start the service"
+echo ""
+echo "Tested on: Ubuntu 24.04, Python 3.12.10, AMD Strix Halo GPU"
+echo ""
 
 # Check if Python is installed
+echo "🔍 Step 1: Checking system requirements..."
+echo "----------------------------------------"
+
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 is not installed. Please install Python 3.8+ first."
     exit 1
@@ -18,58 +33,168 @@ fi
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "✅ Python version: $PYTHON_VERSION"
 
-# Check if CUDA is available
-echo "🔍 Checking CUDA availability..."
-if python3 -c "import torch; print('CUDA available:', torch.cuda.is_available())" 2>/dev/null; then
-    echo "✅ CUDA is available"
-else
-    echo "⚠️  CUDA not available. Installing CPU-only PyTorch..."
-    CUDA_INDEX=""
+# Check if virtual environment already exists
+if [ -d ".venv" ]; then
+    echo "⚠️  Virtual environment '.venv' already exists."
+    read -p "Do you want to remove it and create a fresh one? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "🗑️  Removing existing virtual environment..."
+        rm -rf .venv
+        echo "✅ Existing virtual environment removed."
+    else
+        echo "ℹ️  Using existing virtual environment."
+    fi
 fi
 
 # Create virtual environment
-echo "📦 Creating virtual environment..."
-python3 -m venv .venv
+echo ""
+echo "📦 Step 2: Creating virtual environment..."
+echo "----------------------------------------"
+
+if [ ! -d ".venv" ]; then
+    echo "📦 Creating new virtual environment..."
+    python3 -m venv .venv
+    if [ $? -eq 0 ]; then
+        echo "✅ Virtual environment created successfully!"
+    else
+        echo "❌ Failed to create virtual environment."
+        exit 1
+    fi
+else
+    echo "✅ Virtual environment already exists."
+fi
 
 # Activate virtual environment
 echo "🔧 Activating virtual environment..."
 source .venv/bin/activate
 
+# Verify virtual environment is activated
+VENV_PYTHON=$(which python)
+echo "✅ Virtual environment activated: $VENV_PYTHON"
+
+# Verify virtual environment is working
+if [[ "$VENV_PYTHON" == *".venv"* ]]; then
+    echo "✅ Virtual environment is properly activated!"
+else
+    echo "❌ Virtual environment activation failed!"
+    exit 1
+fi
+
+# Check if ROCm is available (after virtual environment is activated)
+echo ""
+echo "🔍 Step 3: Checking GPU support..."
+echo "----------------------------------------"
+echo "🔍 Checking ROCm availability..."
+if python -c "import torch; print('ROCm available:', torch.cuda.is_available())" 2>/dev/null; then
+    echo "✅ ROCm is available"
+else
+    echo "⚠️  ROCm not available. Installing CPU-only PyTorch..."
+    CUDA_INDEX=""
+fi
+
 # Upgrade pip
+echo ""
+echo "⬆️  Step 4: Installing dependencies..."
+echo "----------------------------------------"
 echo "⬆️  Upgrading pip..."
 pip install --upgrade pip
 
 # Install other dependencies
 echo "📚 Installing other dependencies..."
 pip install -r requirements.txt
+if [ $? -eq 0 ]; then
+    echo "✅ Dependencies installed successfully!"
+else
+    echo "❌ Failed to install dependencies."
+    exit 1
+fi
 
 # Install PyTorch with ROCm support (as tested)
 echo "🚀 Installing PyTorch with ROCm support..."
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+echo "Note: This may take a while as it downloads ROCm-enabled PyTorch packages..."
+
+# First, uninstall any existing PyTorch packages to avoid conflicts
+pip uninstall torch torchvision torchaudio -y 2>/dev/null || true
+
+# Install PyTorch with ROCm support
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+if [ $? -eq 0 ]; then
+    echo "✅ PyTorch with ROCm installed successfully!"
+else
+    echo "❌ Failed to install PyTorch with ROCm."
+    echo "Trying alternative installation method..."
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3 --force-reinstall
+    if [ $? -eq 0 ]; then
+        echo "✅ PyTorch with ROCm installed successfully (force reinstall)!"
+    else
+        echo "❌ Failed to install PyTorch with ROCm. Please check your system."
+        exit 1
+    fi
+fi
 
 # Verify installation
+echo ""
+echo "✅ Step 5: Verifying installation..."
+echo "----------------------------------------"
 echo "✅ Verifying installation..."
-python3 -c "
+
+# Check if ROCm libraries are available
+echo "🔍 Checking ROCm library availability..."
+if [ -f "/opt/rocm/lib/libtorch_hip.so" ] || [ -f "/usr/lib/x86_64-linux-gnu/libtorch_hip.so" ]; then
+    echo "✅ ROCm libraries found on system"
+else
+    echo "⚠️  ROCm libraries not found. This may cause issues with GPU acceleration."
+    echo "   You may need to install ROCm drivers: https://rocmdocs.amd.com/en/latest/deploy/linux/prerequisites.html"
+fi
+
+VERIFICATION_OUTPUT=$(python -c "
 import torch
 import fastapi
 import uvicorn
 import pydub
 import librosa
 import psutil
+import sphn
+import soundfile
+import moshi
 print('✅ All dependencies installed successfully!')
 print(f'PyTorch version: {torch.__version__}')
-print(f'CUDA available: {torch.cuda.is_available()}')
+print(f'ROCm available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'GPU count: {torch.cuda.device_count()}')
     print(f'GPU name: {torch.cuda.get_device_name(0)}')
-"
+else:
+    print('⚠️  ROCm not available. Service will run in CPU mode.')
+")
 
-echo ""
-echo "🎉 Installation completed successfully!"
-echo ""
-echo "🚀 To start the service:"
-echo "   source .venv/bin/activate"
-echo "   python run-tts-service.py"
-echo ""
-echo "📚 For more information, see README.md"
-echo "" 
+if [ $? -eq 0 ]; then
+    echo "$VERIFICATION_OUTPUT"
+    echo ""
+    echo "🎉 Installation completed successfully!"
+    echo ""
+    echo "🚀 To start the service:"
+    echo "   source .venv/bin/activate"
+    echo "   python run-tts-service.py"
+    echo ""
+    echo "📚 For more information, see README.md"
+    echo ""
+    
+    # Ask if user wants to start the service now
+    read -p "Do you want to start the TTS service now? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "🚀 Starting TTS service..."
+        echo "Press Ctrl+C to stop the service"
+        echo ""
+        python run-tts-service.py
+    else
+        echo "ℹ️  You can start the service later with:"
+        echo "   source .venv/bin/activate"
+        echo "   python run-tts-service.py"
+    fi
+else
+    echo "❌ Installation verification failed!"
+    echo "Please check the error messages above."
+    exit 1
+fi 
