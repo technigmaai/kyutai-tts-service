@@ -64,7 +64,10 @@ source .venv/bin/activate  # Linux/Mac
 # or
 .venv\Scripts\activate     # Windows
 
-# Install dependencies
+# Install PyTorch with ROCm support (as tested)
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+
+# Install other dependencies
 pip install -r requirements.txt
 ```
 

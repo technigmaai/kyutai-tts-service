@@ -5,6 +5,7 @@
 - **Platform**: ROCm 6.3
 - **Environment**: PyTorch2 (.venv)
 - **HSA Override**: `export HSA_OVERRIDE_GFX_VERSION=11.0.0` in ~/.bashrc
+- **PyTorch Installation**: `pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3`
 
 ## 🔍 Analysis of PyTorch2 Environment
 
@@ -127,6 +128,15 @@ source ~/.bashrc
 ```bash
 echo $HSA_OVERRIDE_GFX_VERSION
 ```
+
+### PyTorch Installation Method
+The tested PyTorch installation command:
+
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+```
+
+**Note**: This command installs the latest compatible versions for ROCm 6.3, which were verified to work with the AMD Strix Halo GPU.
 
 ---
 

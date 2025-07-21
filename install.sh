@@ -39,9 +39,9 @@ source .venv/bin/activate
 echo "⬆️  Upgrading pip..."
 pip install --upgrade pip
 
-# Install PyTorch with ROCm support (matching PyTorch2 environment)
+# Install PyTorch with ROCm support (as tested)
 echo "🚀 Installing PyTorch with ROCm support..."
-pip install torch==2.7.1+rocm6.3 torchvision==0.22.1+rocm6.3 torchaudio==2.7.1+rocm6.3 --index-url https://download.pytorch.org/whl/rocm6.3
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 
 # Install other dependencies
 echo "📚 Installing other dependencies..."
