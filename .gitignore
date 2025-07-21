@@ -1,0 +1,92 @@
+# Audio files
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+*.aac
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+temp/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+cache/
+
+# Model files (if any)
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Audio cache
+/tmp/tts_cache/
+tts_cache/
+
+# Test outputs
+test_*.mp3
+test_*.wav
+generated_speech.mp3
+my_audio_file.mp3
+test_wav_file.wav
+test_custom_filename.mp3
+my_audio_file.mp3
+test_wav_new_param.wav
+ssml_test_output.mp3
+xxx.mp3 
