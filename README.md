@@ -67,9 +67,10 @@ source .venv/bin/activate  # Linux/Mac
 
 # Install other dependencies (PyTorch packages are excluded from requirements.txt)
 pip install -r requirements.txt
-```
+
 # Install PyTorch with ROCm support (as tested)
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+```
 
 ### 4. Environment Setup (Required for AMD GPUs)
 ```bash
