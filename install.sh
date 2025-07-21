@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# GPU-Optimized TTS Service Installation Script
-# This script sets up the TTS service with all dependencies including ROCm
+# GPU-Optimized Kyutai TTS Service Installation Script
+# This script sets up the Kyutai TTS service with all dependencies including ROCm
 
 set -e  # Exit on any error
 
-echo "🎵 GPU-Optimized TTS Service Installation"
+echo "🎵 GPU-Optimized Kyutai TTS Service Installation"
 echo "=========================================="
 echo ""
 echo "This script will:"
@@ -237,10 +237,10 @@ if [ $? -eq 0 ]; then
     echo ""
     
     # Ask if user wants to start the service now
-    read -p "Do you want to start the TTS service now? (y/N): " -n 1 -r
+    read -p "Do you want to start the Kyutai TTS service now? (y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "🚀 Starting TTS service..."
+        echo "🚀 Starting Kyutai TTS service..."
         echo "Press Ctrl+C to stop the service"
         echo ""
         python run-tts-service.py

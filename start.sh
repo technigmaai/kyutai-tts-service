@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Quick Start Script for TTS Service
+# Quick Start Script for Kyutai TTS Service
 # This script activates the virtual environment and starts the service
 
-echo "🎵 Starting GPU-Optimized TTS Service"
+echo "🎵 Starting GPU-Optimized Kyutai TTS Service"
 echo "====================================="
 
 # Check if virtual environment exists
@@ -34,7 +34,7 @@ else:
 "
 
 echo ""
-echo "🚀 Starting TTS service..."
+echo "🚀 Starting Kyutai TTS service..."
 echo "📡 Service will be available at: http://localhost:8000"
 echo "📚 API documentation: http://localhost:8000/docs"
 echo ""

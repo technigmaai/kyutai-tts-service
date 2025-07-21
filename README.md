@@ -45,8 +45,8 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/technigmaai/tts-service.git
-cd tts-service
+git clone https://github.com/technigmaai/kyutai-tts-service.git
+cd kyutai-tts-service
 ```
 
 ### 2. Quick Installation (Recommended)
@@ -350,7 +350,7 @@ The service provides detailed logging:
 ## 📁 File Structure
 
 ```
-tts-service/
+kyutai-tts-service/
 ├── run-tts-service.py    # Main service file
 ├── README.md            # This file
 ├── .gitignore          # Git ignore rules
