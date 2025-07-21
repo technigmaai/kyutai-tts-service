@@ -231,7 +231,7 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "🚀 To start the service:"
     echo "   source .venv/bin/activate"
-    echo "   python run-tts-service.py"
+    echo "   python kyutai-tts-service.py"
     echo ""
     echo "📚 For more information, see README.md"
     echo ""
@@ -243,11 +243,11 @@ if [ $? -eq 0 ]; then
         echo "🚀 Starting Kyutai TTS service..."
         echo "Press Ctrl+C to stop the service"
         echo ""
-        python run-tts-service.py
+        python kyutai-tts-service.py
     else
         echo "ℹ️  You can start the service later with:"
         echo "   source .venv/bin/activate"
-        echo "   python run-tts-service.py"
+        echo "   python kyutai-tts-service.py"
     fi
 else
     echo "❌ Installation verification failed!"

@@ -103,13 +103,13 @@ python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); 
 
 # Or manual start
 source .venv/bin/activate
-python run-tts-service.py
+python kyutai-tts-service.py
 ```
 
 ### 2. Test the Service
 ```bash
 # Simple text-to-speech
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Hello, this is a test of the TTS service!",
@@ -145,7 +145,7 @@ Generate speech from text with advanced options.
 
 **Basic TTS:**
 ```bash
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Hello world!",
@@ -157,7 +157,7 @@ curl -X POST "http://localhost:8000/api/tts" \
 
 **Advanced TTS with Cleaning:**
 ```bash
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "This is high-quality audio with noise reduction.",
@@ -175,7 +175,7 @@ curl -X POST "http://localhost:8000/api/tts" \
 
 **Fast Mode (Speed Optimized):**
 ```bash
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Quick generation with optimized settings.",
@@ -189,7 +189,7 @@ curl -X POST "http://localhost:8000/api/tts" \
 
 **SSML with Multiple Voices:**
 ```bash
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "<speak><voice name=\"Happy\">Hello! This is a happy voice.</voice><break time=\"1s\"/><voice name=\"Sad\">And this is a sad voice.</voice><break time=\"2s\"/><voice name=\"Angry\">Finally, an angry voice!</voice></speak>",
@@ -205,22 +205,22 @@ curl -X POST "http://localhost:8000/api/tts" \
 
 #### Health Check
 ```bash
-curl "http://localhost:8000/health"
+curl "http://localhost:7861/health"
 ```
 
 #### List Available Voices
 ```bash
-curl "http://localhost:8000/api/voices"
+curl "http://localhost:7861/api/voices"
 ```
 
 #### GPU Memory Status
 ```bash
-curl "http://localhost:8000/api/gpu-status"
+curl "http://localhost:7861/api/gpu-status"
 ```
 
 #### Clean Audio Only
 ```bash
-curl -X POST "http://localhost:8000/api/clean-audio" \
+curl -X POST "http://localhost:7861/api/clean-audio" \
   -H "Content-Type: application/json" \
   -d '{
     "audio_file": "path/to/audio.mp3",
@@ -317,14 +317,14 @@ export CUDA_MEMORY_FRACTION=0.80
 **2. Slow Performance**
 ```bash
 # Enable fast mode
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -d '{"text": "test", "fast_mode": true}'
 ```
 
 **3. Audio Quality Issues**
 ```bash
 # Enable audio cleaning
-curl -X POST "http://localhost:8000/api/tts" \
+curl -X POST "http://localhost:7861/api/tts" \
   -d '{"text": "test", "apply_cleaning": true}'
 ```
 
@@ -351,7 +351,7 @@ The service provides detailed logging:
 
 ```
 kyutai-tts-service/
-├── run-tts-service.py    # Main service file
+├── kyutai-tts-service.py    # Main service file
 ├── README.md            # This file
 ├── .gitignore          # Git ignore rules
 ├── requirements.txt     # Python dependencies

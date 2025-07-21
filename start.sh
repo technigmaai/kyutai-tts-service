@@ -17,8 +17,8 @@ echo "🔧 Activating virtual environment..."
 source .venv/bin/activate
 
 # Check if main service file exists
-if [ ! -f "run-tts-service.py" ]; then
-    echo "❌ Service file not found: run-tts-service.py"
+if [ ! -f "kyutai-tts-service.py" ]; then
+    echo "❌ Service file not found: kyutai-tts-service.py"
     exit 1
 fi
 
@@ -42,4 +42,4 @@ echo "Press Ctrl+C to stop the service"
 echo ""
 
 # Start the service
-python3 run-tts-service.py 
+python3 kyutai-tts-service.py 
