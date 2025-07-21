@@ -261,21 +261,6 @@ export ENABLE_AUDIO_CLEANING=true
 - **Tensor Reuse**: Automatic cleanup and reuse
 - **Adaptive Allocation**: Based on usage patterns
 
-## 📊 Performance Metrics
-
-### Typical Performance (AMD Strix Halo GFX1150)
-- **Simple Text (50 words)**: ~5-8 seconds
-- **Complex SSML (200 words)**: ~15-25 seconds
-- **Fast Mode**: 20-30% faster than normal mode
-- **GPU Utilization**: 4-5% during processing
-- **Memory Usage**: ~4GB GPU, ~54% system RAM
-
-### Optimization Results
-- **88% Speed Improvement**: From 131s to ~19s baseline
-- **GPU Memory Efficiency**: 95% utilization with pooling
-- **Concurrent Processing**: Up to 4 simultaneous requests
-- **Audio Quality**: Maintained with cleaning pipeline
-
 ## 🔧 Advanced Usage
 
 ### SSML Support
