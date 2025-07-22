@@ -4,6 +4,10 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 
 > **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
 
+## 📚 Documentation
+
+- **[Audio Cleaning Parameters Guide](AUDIO_CLEANING_PARAMETERS.md)** - Detailed explanation of how audio cleaning parameters work
+
 ## 🚀 Features
 
 ### Core Features
@@ -122,6 +126,8 @@ curl -X POST "http://localhost:7861/api/tts" \
 ```
 
 ## 📚 API Documentation
+
+> **📖 Audio Cleaning Guide**: For detailed information about audio cleaning parameters, see the **[Audio Cleaning Parameters Guide](AUDIO_CLEANING_PARAMETERS.md)**.
 
 ### Endpoint: `POST /api/tts`
 
