@@ -1,6 +1,6 @@
 # 🎵 GPU-Optimized Text-to-Speech Service
 
-A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Kyutai TTS. Features advanced GPU memory management, batch processing, audio cleaning, and SSML support.
+A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features advanced GPU memory management, batch processing, audio cleaning, and SSML support.
 
 > **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
 
@@ -43,7 +43,7 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 - **PyTorch**: 2.7.1+ with ROCm support (AMD GPU optimized)
 - **FastAPI**: Web framework
 - **Uvicorn**: ASGI server
-- **TTS Model**: Kyutai TTS or alternative TTS library
+- **TTS Model**: Moshi TTS (kyutai/tts-1.6b-en_fr)
 
 ## 🛠️ Installation
 
@@ -212,7 +212,7 @@ curl -X POST "http://localhost:7861/api/tts" \
 
 #### Health Check
 ```bash
-curl "http://localhost:7861/health"
+curl "http://localhost:7861/api/health"
 ```
 
 #### List Available Voices
@@ -220,50 +220,53 @@ curl "http://localhost:7861/health"
 curl "http://localhost:7861/api/voices"
 ```
 
-#### GPU Memory Status
+#### Memory Status
 ```bash
-curl "http://localhost:7861/api/gpu-status"
+curl "http://localhost:7861/api/memory/stats"
 ```
 
 #### Clean Audio Only
 ```bash
 curl -X POST "http://localhost:7861/api/clean-audio" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "audio_file": "path/to/audio.mp3",
-    "volume_boost": 6.0,
-    "remove_crackles": true,
-    "apply_filters": true,
-    "reduce_noise": true
-  }'
+  -F "audio_file=@path/to/audio.mp3" \
+  -F "volume_boost=6.0" \
+  -F "remove_crackles=true" \
+  -F "apply_filters=true" \
+  -F "reduce_noise=true"
 ```
 
 ## ⚙️ Configuration
 
-### Environment Variables
-```bash
-# GPU Memory Fraction (0.0-1.0)
-export CUDA_MEMORY_FRACTION=0.95
+### Performance Settings
 
-# Max Concurrent Requests
-export MAX_CONCURRENT_REQUESTS=4
+The service uses the following default configuration values:
 
-# Enable/Disable Features
-export ENABLE_FAST_MODE=true
-export ENABLE_BATCH_PROCESSING=true
-export ENABLE_AUDIO_CLEANING=true
+```python
+# Request Management
+MAX_CONCURRENT_REQUESTS = 4
+MAX_BATCH_SIZE = 16
+
+# GPU Optimizations
+ENABLE_FAST_MODE = True
+ENABLE_BATCH_PROCESSING = True
+ENABLE_CONCURRENT_CLEANING = True
+ENABLE_MODEL_QUANTIZATION = True
+ENABLE_PARALLEL_PROCESSING = True
+
+# Memory Management
+GPU_MEMORY_FRACTION = 0.90  # 90% of GPU memory
+MEMORY_POOL_MAX_FRACTION = 0.85  # 85% for memory pool
 ```
 
 ### Performance Settings
 
 #### Fast Mode Configuration
 - **Batch Size**: 24 (vs 16 in normal mode)
-- **CUDA Streams**: 16 (vs 8 in normal mode)
-- **GPU Memory Fraction**: 95% (vs 90% in normal mode)
+- **GPU Memory Fraction**: 90% (configurable)
 - **Audio Cleaning**: Enabled with optimized settings
 
 #### Memory Management
-- **GPU Memory Pool**: 81.6GB allocation
+- **GPU Memory Pool**: Adaptive allocation based on available GPU memory
 - **Tensor Reuse**: Automatic cleanup and reuse
 - **Adaptive Allocation**: Based on usage patterns
 
@@ -302,14 +305,16 @@ The GPU-accelerated cleaning includes:
 
 **1. CUDA Out of Memory**
 ```bash
-# Reduce GPU memory fraction
-export CUDA_MEMORY_FRACTION=0.80
+# The service automatically manages GPU memory
+# Check memory usage via API
+curl "http://localhost:7861/api/memory/stats"
 ```
 
 **2. Slow Performance**
 ```bash
 # Enable fast mode
 curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
   -d '{"text": "test", "fast_mode": true}'
 ```
 
@@ -317,6 +322,7 @@ curl -X POST "http://localhost:7861/api/tts" \
 ```bash
 # Enable audio cleaning
 curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
   -d '{"text": "test", "apply_cleaning": true}'
 ```
 
@@ -365,10 +371,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- **Kyutai TTS**: Core TTS model
+- **Moshi TTS**: Core TTS model (kyutai/tts-1.6b-en_fr)
 - **PyTorch**: GPU acceleration framework
 - **FastAPI**: Web framework
-- **CUDA**: NVIDIA GPU computing platform
+- **ROCm**: AMD GPU computing platform
 
 ## 📞 Support
 
@@ -381,6 +387,6 @@ For issues and questions:
 ---
 
 **Last Updated**: July 21, 2025  
-**Version**: 1.0.0  
+**Version**: 3.0.0  
 **GPU Optimized**: ✅  
 **Production Ready**: ✅ 
