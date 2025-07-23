@@ -245,9 +245,38 @@ class ClearerVoiceEnhancer:
         try:
             if hasattr(self, 'clearvoice_model') and self.clearvoice_model is not None:
                 # Use real ClearerVoice-Studio for file enhancement
-                enhanced_audio = self.clearvoice_model(input_path=file_path, online_write=False)
-                logger.info("✅ File enhanced successfully with real ClearerVoice-Studio")
-                return enhanced_audio, 16000  # ClearVoice outputs 16kHz
+                try:
+                    enhanced_audio = self.clearvoice_model(input_path=file_path, online_write=False)
+                    logger.info("✅ File enhanced successfully with real ClearerVoice-Studio")
+                    
+                    # Debug: Check what ClearerVoice actually returned
+                    logger.info(f"🔍 ClearerVoice returned audio shape: {enhanced_audio.shape if hasattr(enhanced_audio, 'shape') else 'No shape'}")
+                    logger.info(f"🔍 ClearerVoice returned audio type: {type(enhanced_audio)}")
+                    logger.info(f"🔍 ClearerVoice returned audio length: {len(enhanced_audio) if hasattr(enhanced_audio, '__len__') else 'No length'}")
+                    
+                    # Check if the audio is valid
+                    if enhanced_audio is None or (hasattr(enhanced_audio, '__len__') and len(enhanced_audio) == 0):
+                        logger.error("❌ ClearerVoice returned empty audio, falling back to original")
+                        import librosa
+                        audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                        return audio_data, sample_rate
+                    
+                    # Ensure the audio is a numpy array
+                    if isinstance(enhanced_audio, torch.Tensor):
+                        enhanced_audio = enhanced_audio.cpu().numpy()
+                    
+                    # Ensure it's 1D
+                    if len(enhanced_audio.shape) > 1:
+                        enhanced_audio = enhanced_audio.squeeze()
+                    
+                    return enhanced_audio, 16000  # ClearVoice outputs 16kHz
+                    
+                except Exception as e:
+                    logger.error(f"❌ ClearerVoice processing failed: {e}")
+                    # Fall back to original audio
+                    import librosa
+                    audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                    return audio_data, sample_rate
             else:
                 # Fallback to librosa loading and enhancement
                 import librosa
@@ -621,7 +650,7 @@ ENABLE_CPU_OPTIMIZATIONS = True  # Enable CPU usage optimizations
 ENABLE_BATCH_PROCESSING = True  # Enable batch processing for higher GPU utilization
 MAX_BATCH_SIZE = 16  # Process up to 16 segments simultaneously (increased from 8)
 ENABLE_CONCURRENT_CLEANING = True  # Enable concurrent audio cleaning
-ENABLE_FAST_MODE = True  # Enable fast mode without audio cleaning for speed
+
 ENABLE_MODEL_QUANTIZATION = True  # Enable model quantization for speed
 ENABLE_PARALLEL_PROCESSING = True  # Enable parallel processing
 MAX_CONCURRENT_REQUESTS = 4  # Allow more concurrent requests
@@ -962,23 +991,18 @@ class GPUAudioCleaner:
         self.audio_tensor = torch.sign(self.audio_tensor) * compressed_magnitude
         logger.debug(f"✓ Gentle compression applied (GPU, threshold: {threshold}, ratio: {ratio}:1)")
     
-    def clean_audio_gpu(self, volume_boost_db=6, remove_crackles=True, 
-                       apply_filters=True, reduce_noise=True):
+    def clean_audio_gpu(self, volume_boost_db=6):
         """Complete GPU-accelerated audio cleaning pipeline"""
         logger.info("Starting GPU-accelerated audio cleaning process...")
         
         # Basic cleaning
         self.remove_dc_offset()
         
-        if remove_crackles:
-            self.remove_clicks_pops_gpu()
-        
-        if apply_filters:
-            self.apply_highpass_filter_gpu(cutoff=80)
-            self.apply_lowpass_filter_gpu(cutoff=8000)
-        
-        if reduce_noise:
-            self.reduce_noise_spectral_gpu()
+        # Always apply cleaning steps (ClearerVoice handles the heavy lifting)
+        self.remove_clicks_pops_gpu()
+        self.apply_highpass_filter_gpu(cutoff=80)
+        self.apply_lowpass_filter_gpu(cutoff=8000)
+        self.reduce_noise_spectral_gpu()
         
         # Volume and dynamics
         self.normalize_audio_gpu()
@@ -1025,8 +1049,7 @@ class GPUAudioCleaner:
             logger.debug(f"✓ Low-pass filter applied (CPU fallback, cutoff: {cutoff} Hz)")
 
 # GPU-optimized audio processing functions
-def clean_audio_from_file_gpu(file_path, volume_boost=6, remove_crackles=True, 
-                             apply_filters=True, reduce_noise=True):
+def clean_audio_from_file_gpu(file_path, volume_boost=6):
     """Clean audio from file path using GPU acceleration with CPU optimization"""
     try:
         logger.debug("🔄 Loading audio file...")
@@ -1047,10 +1070,7 @@ def clean_audio_from_file_gpu(file_path, volume_boost=6, remove_crackles=True,
         # Clean audio using GPU
         cleaner = GPUAudioCleaner(audio_data, sample_rate, device)
         cleaned_audio = cleaner.clean_audio_gpu(
-            volume_boost_db=volume_boost,
-            remove_crackles=remove_crackles,
-            apply_filters=apply_filters,
-            reduce_noise=reduce_noise
+            volume_boost_db=volume_boost
         )
         
         return cleaned_audio, sample_rate
@@ -1058,8 +1078,7 @@ def clean_audio_from_file_gpu(file_path, volume_boost=6, remove_crackles=True,
         logger.error(f"Error cleaning audio: {e}")
         raise
 
-def clean_audio_segment_gpu(audio_segment, volume_boost=6, remove_crackles=True, 
-                           apply_filters=True, reduce_noise=True):
+def clean_audio_segment_gpu(audio_segment, volume_boost=6):
     """Clean AudioSegment object using GPU acceleration with minimal CPU usage"""
     try:
         logger.debug("🔄 Converting AudioSegment for GPU processing...")
@@ -1086,10 +1105,7 @@ def clean_audio_segment_gpu(audio_segment, volume_boost=6, remove_crackles=True,
         # Clean audio using GPU
         cleaner = GPUAudioCleaner(audio_data, sample_rate, device)
         cleaned_audio = cleaner.clean_audio_gpu(
-            volume_boost_db=volume_boost,
-            remove_crackles=remove_crackles,
-            apply_filters=apply_filters,
-            reduce_noise=reduce_noise
+            volume_boost_db=volume_boost
         )
         
         # Convert back to AudioSegment efficiently with proper bounds checking
@@ -1426,8 +1442,6 @@ def parse_ssml(ssml_text: str, default_voice: str):
 # --- High GPU Utilization Audio Generation ---
 def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_format: str = "mp3",
                                 apply_cleaning: bool = False, volume_boost: float = 6.0, 
-                                remove_crackles: bool = True, apply_filters: bool = True, 
-                                reduce_noise: bool = True, fast_mode: bool = False, 
                                 filename: str = None, use_native_sample_rate: bool = True,
                                 use_clearvoice: bool = True, clearvoice_enhancement: bool = False) -> str:
     """Generate audio with maximum GPU utilization through batching and concurrency"""
@@ -1451,32 +1465,8 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
         output_filename = f"tts_output_{timestamp}.{output_format}"
         logger.info(f"📁 Generated filename: {output_filename}")
     
-    # Fast mode optimizes for speed while keeping audio cleaning for quality
-    if fast_mode:
-        logger.info("🚀 Starting FAST MODE audio generation (optimized settings with audio cleaning)...")
-        # Fast mode keeps audio cleaning but uses optimized settings
-        # - Larger batch sizes
-        # - More aggressive CUDA settings
-        # - Better memory management
-        # - Audio cleaning for quality
-        
-        # Use larger batch size for fast mode
-        fast_batch_size = min(24, MAX_BATCH_SIZE * 2)  # Triple the batch size for fast mode
-        logger.info(f"🚀 Fast mode using batch size: {fast_batch_size}")
-        
-        # Enable more aggressive optimizations for fast mode
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        
-        # Pre-allocate more memory for fast mode
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of GPU memory
-    else:
-        logger.info("🎵 Starting HIGH GPU UTILIZATION audio generation...")
-        fast_batch_size = MAX_BATCH_SIZE
+    logger.info("🎵 Starting HIGH GPU UTILIZATION audio generation...")
+    fast_batch_size = MAX_BATCH_SIZE
     
     # Enable mixed precision for compiled models if available
     use_mixed_precision = COMPILATION_ENABLED and torch.cuda.is_available()
@@ -1559,8 +1549,8 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                             with torch.no_grad():
                                 # Create multiple CUDA streams for concurrent execution
                                 if torch.cuda.is_available():
-                                    # Use more streams for fast mode
-                                    max_streams = 16 if fast_mode else 8
+                                    # Use optimal number of streams
+                                    max_streams = 8
                                     streams = [torch.cuda.Stream() for _ in range(min(len(batch), max_streams))]
                                     
                                     # Launch parallel generations
@@ -1586,8 +1576,8 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                         with torch.no_grad():
                             # Create multiple CUDA streams for concurrent execution
                             if torch.cuda.is_available():
-                                # Use more streams for fast mode
-                                max_streams = 16 if fast_mode else 8
+                                # Use optimal number of streams
+                                max_streams = 8
                                 streams = [torch.cuda.Stream() for _ in range(min(len(batch), max_streams))]
                                 
                                 # Launch parallel generations
@@ -1785,6 +1775,9 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                     sf.write(temp_file.name, audio_data, current_sample_rate)
                     temp_path = temp_file.name
                 
+                # Prepare original audio data for fallback
+                audio_data_int = np.clip(audio_data * 32767, -32767, 32767).astype(np.int16)
+                
                 try:
                     # Use the same approach as /api/clearvoice-enhance
                     enhanced_audio, enhanced_sample_rate = enhance_audio_file_clearvoice(
@@ -1796,12 +1789,29 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                     
                     # Convert back to AudioSegment
                     enhanced_audio_int = np.clip(enhanced_audio * 32767, -32767, 32767).astype(np.int16)
-                    final_audio = AudioSegment(
-                        enhanced_audio_int.tobytes(),
-                        frame_rate=enhanced_sample_rate,
-                        sample_width=2,
-                        channels=1
-                    )
+                    
+                    # Safety check: Ensure enhanced audio length is reasonable
+                    original_length = len(audio_data) / current_sample_rate
+                    enhanced_length = len(enhanced_audio_int) / enhanced_sample_rate
+                    
+                    logger.info(f"📊 Audio length check - Original: {original_length:.2f}s, Enhanced: {enhanced_length:.2f}s")
+                    
+                    # If enhanced audio is significantly shorter, warn and use original
+                    if enhanced_length < original_length * 0.8:  # 20% tolerance
+                        logger.warning(f"⚠️ Enhanced audio is too short ({enhanced_length:.2f}s vs {original_length:.2f}s), using original")
+                        final_audio = AudioSegment(
+                            audio_data_int.tobytes(),
+                            frame_rate=current_sample_rate,
+                            sample_width=2,
+                            channels=1
+                        )
+                    else:
+                        final_audio = AudioSegment(
+                            enhanced_audio_int.tobytes(),
+                            frame_rate=enhanced_sample_rate,
+                            sample_width=2,
+                            channels=1
+                        )
                 except Exception as e:
                     # Clean up temporary file on error
                     if os.path.exists(temp_path):
@@ -1822,10 +1832,7 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 # Apply GPU cleaning to the complete audio
                 final_audio = clean_audio_segment_gpu(
                     final_audio, 
-                    volume_boost, 
-                    remove_crackles, 
-                    apply_filters, 
-                    reduce_noise
+                    volume_boost
                 )
                 logger.info(f"🧹 GPU cleaning completed in {time.time() - cleaning_start:.2f}s")
             except Exception as cleaning_error:
@@ -1889,10 +1896,6 @@ class TTSRequest(BaseModel):
     output_format: str = "mp3"
     apply_cleaning: bool = False
     volume_boost: float = 6.0
-    remove_crackles: bool = True
-    apply_filters: bool = True
-    reduce_noise: bool = True
-    fast_mode: bool = False  # Skip audio cleaning for maximum speed
     filename: str = None  # Allow custom filename for output
     use_native_sample_rate: bool = True  # Use model's native sample rate instead of 44.1kHz
     use_clearvoice: bool = True  # Use ClearerVoice-Studio for audio enhancement (if available)
@@ -1930,9 +1933,6 @@ async def tts_endpoint(request: TTSRequest):
         request.output_format,
         apply_cleaning=request.apply_cleaning,
         volume_boost=request.volume_boost,
-        remove_crackles=request.remove_crackles,
-        apply_filters=request.apply_filters,
-        reduce_noise=request.reduce_noise,
         use_native_sample_rate=request.use_native_sample_rate,
         use_clearvoice=request.use_clearvoice,
         clearvoice_enhancement=request.clearvoice_enhancement
@@ -1959,10 +1959,6 @@ async def tts_endpoint(request: TTSRequest):
             output_format=request.output_format,
             apply_cleaning=request.apply_cleaning,
             volume_boost=request.volume_boost,
-            remove_crackles=request.remove_crackles,
-            apply_filters=request.apply_filters,
-            reduce_noise=request.reduce_noise,
-            fast_mode=request.fast_mode,
             filename=request.filename,
             use_native_sample_rate=request.use_native_sample_rate,
             use_clearvoice=request.use_clearvoice,
@@ -2206,11 +2202,26 @@ async def clearvoice_enhance_endpoint(
             temp_input.write(content)
             temp_input_path = temp_input.name
         
+        # Get original audio length for safety check
+        import librosa
+        original_audio, original_sr = librosa.load(temp_input_path, sr=None, mono=True)
+        original_length = len(original_audio) / original_sr
+        
         # Enhance the audio using ClearerVoice-Studio
         enhanced_audio, sample_rate = enhance_audio_file_clearvoice(
             temp_input_path,
             use_clearvoice=use_clearvoice
         )
+        
+        # Safety check: Ensure enhanced audio length is reasonable
+        enhanced_length = len(enhanced_audio) / sample_rate
+        logger.info(f"📊 Audio length check - Original: {original_length:.2f}s, Enhanced: {enhanced_length:.2f}s")
+        
+        # If enhanced audio is significantly shorter, warn and use original
+        if enhanced_length < original_length * 0.8:  # 20% tolerance
+            logger.warning(f"⚠️ Enhanced audio is too short ({enhanced_length:.2f}s vs {original_length:.2f}s), using original")
+            enhanced_audio = original_audio
+            sample_rate = original_sr
         
         # Save enhanced audio as MP3
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_output:
