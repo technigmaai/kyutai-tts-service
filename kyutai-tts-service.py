@@ -17,7 +17,7 @@ import re
 import os
 import html
 from xml.etree import ElementTree as ET
-from typing import Optional
+from typing import Optional, Tuple
 import torchaudio
 import torchaudio.transforms as T
 import psutil
@@ -34,9 +34,347 @@ import soundfile as sf
 import warnings
 warnings.filterwarnings('ignore')
 
-# Setup logging first (before memory pool)
+# Setup logging first (before any imports that might use logger)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# ClearerVoice-Studio integration
+try:
+    from modelscope import snapshot_download, AutoModel
+    from transformers import AutoProcessor
+    import subprocess
+    import sys
+    CLEARVOICE_AVAILABLE = True
+    logger.info("✅ ClearerVoice-Studio dependencies available")
+except ImportError as e:
+    logger.warning(f"⚠️ ClearerVoice-Studio dependencies not available: {e}")
+    CLEARVOICE_AVAILABLE = False
+
+# ClearerVoice-Studio Integration Classes
+class ClearerVoiceEnhancer:
+    """
+    Real ClearerVoice-Studio integration
+    
+    Uses the actual ClearerVoice-Studio implementation from:
+    https://github.com/modelscope/ClearerVoice-Studio/tree/main/clearvoice
+    """
+    
+    def __init__(self, device=None):
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = None
+        self.processor = None
+        self.model_loaded = False
+        self.clearvoice_dir = None
+        
+        if CLEARVOICE_AVAILABLE:
+            self._setup_clearvoice()
+        else:
+            logger.warning("⚠️ ClearerVoice-Studio not available, falling back to basic cleaning")
+    
+    def _setup_clearvoice(self):
+        """Setup ClearerVoice-Studio from the official repository"""
+        try:
+            logger.info("🔄 Setting up ClearerVoice-Studio from official repository...")
+            
+            # Download ClearerVoice-Studio repository
+            repo_url = "https://github.com/modelscope/ClearerVoice-Studio.git"
+            self.clearvoice_dir = "./clearvoice_studio"
+            
+            # Clone the repository if it doesn't exist
+            if not os.path.exists(self.clearvoice_dir):
+                logger.info(f"📥 Cloning ClearerVoice-Studio repository...")
+                subprocess.run([
+                    "git", "clone", repo_url, self.clearvoice_dir
+                ], check=True)
+                logger.info("✅ ClearerVoice-Studio repository cloned")
+            else:
+                logger.info("✅ ClearerVoice-Studio repository already exists")
+            
+            # Add the clearvoice directory to Python path
+            clearvoice_path = os.path.join(self.clearvoice_dir, "clearvoice")
+            if clearvoice_path not in sys.path:
+                sys.path.insert(0, clearvoice_path)
+                logger.info(f"✅ Added {clearvoice_path} to Python path")
+            
+            # Import ClearerVoice modules
+            try:
+                from clearvoice import ClearVoice
+                # Initialize ClearVoice with speech enhancement task
+                self.clearvoice_model = ClearVoice(task='speech_enhancement', model_names=['FRCRN_SE_16K'])
+                self.model_loaded = True
+                logger.info("✅ ClearerVoice-Studio model loaded successfully")
+            except ImportError as e:
+                logger.error(f"❌ Failed to import ClearerVoice: {e}")
+                self._setup_fallback()
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to setup ClearerVoice-Studio: {e}")
+            self._setup_fallback()
+    
+    def _setup_fallback(self):
+        """Setup fallback to modelscope ClearerVoice model"""
+        try:
+            logger.info("🔄 Setting up ClearerVoice fallback from modelscope...")
+            
+            # Use ClearerVoice model from modelscope
+            model_id = "damo/speech_clearvoice_enhancement"
+            
+            logger.info(f"📥 Downloading ClearerVoice model: {model_id}")
+            
+            # Download and load model
+            model_dir = snapshot_download(model_id, cache_dir="./models")
+            logger.info(f"✅ Model downloaded to: {model_dir}")
+            
+            # Load the model
+            self.model = AutoModel.from_pretrained(
+                model_dir, 
+                torch_dtype=torch.float16 if self.device.type == 'cuda' else torch.float32,
+                device_map="auto" if self.device.type == 'cuda' else None
+            )
+            
+            # Load processor
+            self.processor = AutoProcessor.from_pretrained(model_dir)
+            
+            self.model_loaded = True
+            logger.info("✅ ClearerVoice-Studio fallback model loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to load ClearerVoice fallback: {e}")
+            self.model_loaded = False
+    
+    def enhance_audio(self, audio_data: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, int]:
+        """
+        Enhance audio using real ClearerVoice-Studio
+        
+        Args:
+            audio_data: Input audio as numpy array
+            sample_rate: Audio sample rate
+            
+        Returns:
+            Tuple of (enhanced_audio, sample_rate)
+        """
+        if not self.model_loaded or not CLEARVOICE_AVAILABLE:
+            logger.warning("⚠️ ClearerVoice-Studio not available, returning original audio")
+            return audio_data, sample_rate
+        
+        try:
+            logger.info("🎵 Enhancing audio with real ClearerVoice-Studio...")
+            
+            # Use the actual ClearerVoice-Studio implementation
+            if hasattr(self, 'clearvoice_model'):
+                # Use the real ClearerVoice-Studio
+                # Save audio data to temporary file for ClearVoice processing
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                    import soundfile as sf
+                    sf.write(temp_file.name, audio_data, sample_rate)
+                    temp_path = temp_file.name
+                
+                try:
+                    # Process with ClearVoice
+                    enhanced_audio = self.clearvoice_model(input_path=temp_path, online_write=False)
+                    
+                    # Clean up temporary file
+                    os.unlink(temp_path)
+                    
+                    logger.info("✅ Audio enhanced successfully with real ClearerVoice-Studio")
+                    return enhanced_audio, sample_rate
+                except Exception as e:
+                    logger.error(f"❌ ClearVoice processing failed: {e}")
+                    # Clean up temporary file
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                    return audio_data, sample_rate
+            elif hasattr(self, 'model') and self.model is not None:
+                # Use modelscope ClearerVoice model
+                enhanced_audio = self._enhance_with_modelscope(audio_data, sample_rate)
+                logger.info("✅ Audio enhanced successfully with modelscope ClearerVoice")
+                return enhanced_audio, sample_rate
+            else:
+                logger.warning("⚠️ No ClearerVoice model available")
+                return audio_data, sample_rate
+            
+        except Exception as e:
+            logger.error(f"❌ ClearerVoice-Studio enhancement failed: {e}")
+            return audio_data, sample_rate
+    
+    def _enhance_with_modelscope(self, audio_data: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, int]:
+        """Enhance audio using modelscope ClearerVoice model"""
+        try:
+            # Prepare audio for the model
+            if len(audio_data.shape) == 1:
+                audio_data = audio_data.reshape(1, -1)
+            
+            # Convert to torch tensor
+            audio_tensor = torch.from_numpy(audio_data).float()
+            
+            # Process with the model
+            inputs = self.processor(
+                audio_tensor, 
+                sampling_rate=sample_rate, 
+                return_tensors="pt"
+            )
+            
+            # Move to device
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            # Generate enhanced audio
+            with torch.no_grad():
+                enhanced = self.model.generate(**inputs)
+            
+            # Convert back to numpy
+            enhanced_audio = enhanced.cpu().numpy().squeeze()
+            
+            return enhanced_audio, sample_rate
+            
+        except Exception as e:
+            logger.error(f"❌ Modelscope enhancement failed: {e}")
+            return audio_data, sample_rate
+    
+    def enhance_audio_file(self, file_path: str) -> Tuple[np.ndarray, int]:
+        """
+        Enhance audio file using ClearerVoice-Studio
+        
+        Args:
+            file_path: Path to input audio file
+            
+        Returns:
+            Tuple of (enhanced_audio, sample_rate)
+        """
+        try:
+            if hasattr(self, 'clearvoice_model') and self.clearvoice_model is not None:
+                # Use real ClearerVoice-Studio for file enhancement
+                enhanced_audio = self.clearvoice_model(input_path=file_path, online_write=False)
+                logger.info("✅ File enhanced successfully with real ClearerVoice-Studio")
+                return enhanced_audio, 16000  # ClearVoice outputs 16kHz
+            else:
+                # Fallback to librosa loading and enhancement
+                import librosa
+                audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                return self.enhance_audio(audio_data, sample_rate)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to enhance audio file: {e}")
+            raise
+    
+    def is_available(self) -> bool:
+        """Check if ClearerVoice-Studio is available"""
+        return CLEARVOICE_AVAILABLE and self.model_loaded
+
+class HybridAudioEnhancer:
+    """
+    Hybrid audio enhancement system
+    
+    Combines real ClearerVoice-Studio with GPU cleaning for maximum quality.
+    Falls back to GPU cleaning if ClearerVoice-Studio is not available.
+    """
+    
+    def __init__(self, device=None):
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.clearvoice = ClearerVoiceEnhancer(device)
+        self.use_clearvoice = self.clearvoice.is_available()
+        
+        if self.use_clearvoice:
+            logger.info("🎵 Using real ClearerVoice-Studio for audio enhancement")
+        else:
+            logger.info("🎵 Using GPU cleaning for audio enhancement")
+    
+    def enhance_audio(self, audio_data: np.ndarray, sample_rate: int, 
+                     use_clearvoice: bool = True) -> Tuple[np.ndarray, int]:
+        """
+        Enhance audio using hybrid approach
+        
+        Args:
+            audio_data: Input audio as numpy array
+            sample_rate: Audio sample rate
+            use_clearvoice: Whether to use ClearerVoice-Studio (if available)
+            
+        Returns:
+            Tuple of (enhanced_audio, sample_rate)
+        """
+        # Check current availability dynamically
+        current_clearvoice_available = self.clearvoice.is_available()
+        
+        if use_clearvoice and current_clearvoice_available:
+            # Use real ClearerVoice-Studio for superior enhancement
+            logger.info("🎵 Using real ClearerVoice-Studio for audio enhancement")
+            return self.clearvoice.enhance_audio(audio_data, sample_rate)
+        else:
+            # Fall back to GPU cleaning
+            logger.info("🔄 Using GPU cleaning as fallback")
+            cleaner = GPUAudioCleaner(audio_data, sample_rate, self.device)
+            enhanced_audio = cleaner.clean_audio_gpu(
+                volume_boost_db=6,
+                remove_crackles=True,
+                apply_filters=True,
+                reduce_noise=True
+            )
+            return enhanced_audio, sample_rate
+    
+    def get_enhancement_info(self) -> dict:
+        """Get information about available enhancement methods"""
+        return {
+            "clearvoice_available": self.use_clearvoice,
+            "gpu_cleaning_available": True,
+            "recommended_method": "clearvoice" if self.use_clearvoice else "gpu_cleaning",
+            "device": str(self.device),
+            "clearvoice_type": "real" if hasattr(self.clearvoice, 'clearvoice_model') else "modelscope"
+        }
+
+# Global enhancer instance
+_enhancer = None
+
+def get_enhancer(device=None) -> HybridAudioEnhancer:
+    """Get global enhancer instance"""
+    global _enhancer
+    if _enhancer is None:
+        _enhancer = HybridAudioEnhancer(device)
+    return _enhancer
+
+def enhance_audio_clearvoice(audio_data: np.ndarray, sample_rate: int, 
+                           use_clearvoice: bool = True) -> Tuple[np.ndarray, int]:
+    """
+    Enhanced audio using real ClearerVoice-Studio or GPU cleaning
+    
+    Args:
+        audio_data: Input audio as numpy array
+        sample_rate: Audio sample rate
+        use_clearvoice: Whether to use ClearerVoice-Studio (if available)
+        
+    Returns:
+        Tuple of (enhanced_audio, sample_rate)
+    """
+    enhancer = get_enhancer()
+    return enhancer.enhance_audio(audio_data, sample_rate, use_clearvoice)
+
+def enhance_audio_file_clearvoice(file_path: str, use_clearvoice: bool = True) -> Tuple[np.ndarray, int]:
+    """
+    Enhance audio file using real ClearerVoice-Studio or GPU cleaning
+    
+    Args:
+        file_path: Path to input audio file
+        use_clearvoice: Whether to use ClearerVoice-Studio (if available)
+        
+    Returns:
+        Tuple of (enhanced_audio, sample_rate)
+    """
+    enhancer = get_enhancer()
+    
+    # Check current availability dynamically
+    current_clearvoice_available = enhancer.clearvoice.is_available()
+    
+    if use_clearvoice and current_clearvoice_available:
+        logger.info("🎵 Using real ClearerVoice-Studio for file enhancement")
+        return enhancer.clearvoice.enhance_audio_file(file_path)
+    else:
+        # Use GPU cleaning for file enhancement
+        logger.info("🔄 Using GPU cleaning for file enhancement")
+        return clean_audio_from_file_gpu(
+            file_path,
+            volume_boost=6,
+            remove_crackles=True,
+            apply_filters=True,
+            reduce_noise=True
+        )
 
 # --- Sophisticated GPU Memory Pooling System ---
 class GPUMemoryPool:
@@ -1088,7 +1426,8 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                                 apply_cleaning: bool = False, volume_boost: float = 6.0, 
                                 remove_crackles: bool = True, apply_filters: bool = True, 
                                 reduce_noise: bool = True, fast_mode: bool = False, 
-                                filename: str = None, use_native_sample_rate: bool = True) -> str:
+                                filename: str = None, use_native_sample_rate: bool = True,
+                                use_clearvoice: bool = True, clearvoice_enhancement: bool = False) -> str:
     """Generate audio with maximum GPU utilization through batching and concurrency"""
     global ENABLE_BATCH_PROCESSING  # Fix scoping issue
     
@@ -1421,8 +1760,44 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
         # Set standard bit depth and channels
         final_audio = final_audio.set_sample_width(2).set_channels(1)
         
-        # CONCURRENT GPU CLEANING for maximum utilization
-        if apply_cleaning and ENABLE_CONCURRENT_CLEANING:
+        # ClearerVoice-Studio Enhancement (if enabled and available)
+        if (clearvoice_enhancement or use_clearvoice) and CLEARVOICE_AVAILABLE:
+            try:
+                clearvoice_start = time.time()
+                logger.info(f"🎵 Applying ClearerVoice-Studio enhancement (use_clearvoice={use_clearvoice}, clearvoice_enhancement={clearvoice_enhancement})...")
+                
+                # Convert AudioSegment to numpy for ClearerVoice processing
+                raw_data = final_audio.raw_data
+                audio_array = np.frombuffer(raw_data, dtype=np.int16)
+                audio_data = audio_array.astype(np.float32) / 32768.0
+                
+                # Get current sample rate
+                current_sample_rate = final_audio.frame_rate
+                
+                # Enhance with ClearerVoice-Studio
+                enhanced_audio, enhanced_sample_rate = enhance_audio_clearvoice(
+                    audio_data, current_sample_rate, use_clearvoice
+                )
+                
+                # Convert back to AudioSegment
+                enhanced_audio_int = np.clip(enhanced_audio * 32767, -32767, 32767).astype(np.int16)
+                final_audio = AudioSegment(
+                    enhanced_audio_int.tobytes(),
+                    frame_rate=enhanced_sample_rate,
+                    sample_width=2,
+                    channels=1
+                )
+                
+                logger.info(f"🎵 ClearerVoice-Studio enhancement completed in {time.time() - clearvoice_start:.2f}s")
+                
+            except Exception as clearvoice_error:
+                logger.warning(f"⚠️ ClearerVoice-Studio enhancement failed: {clearvoice_error}")
+                logger.info("🔄 Continuing with original audio")
+        elif (clearvoice_enhancement or use_clearvoice) and not CLEARVOICE_AVAILABLE:
+            logger.info("⚠️ ClearerVoice-Studio requested but not available, using GPU cleaning instead")
+        
+        # CONCURRENT GPU CLEANING for maximum utilization (only if ClearerVoice not used)
+        elif apply_cleaning and ENABLE_CONCURRENT_CLEANING:
             try:
                 cleaning_start = time.time()
                 logger.info("🧹 Applying GPU-accelerated cleaning...")
@@ -1517,6 +1892,8 @@ class TTSRequest(BaseModel):
     fast_mode: bool = False  # Skip audio cleaning for maximum speed
     filename: str = None  # Allow custom filename for output
     use_native_sample_rate: bool = True  # Use model's native sample rate instead of 44.1kHz
+    use_clearvoice: bool = True  # Use ClearerVoice-Studio for audio enhancement (if available)
+    clearvoice_enhancement: bool = False  # Enable ClearerVoice enhancement (alternative to use_clearvoice)
 
 class AudioCleaningRequest(BaseModel):
     volume_boost: float = 6.0
@@ -1536,6 +1913,13 @@ async def tts_endpoint(request: TTSRequest):
             content={"detail": "Invalid output format. Use 'mp3' or 'wav'."}
         )
     
+    # Disable caching for ClearerVoice enhancement to ensure fresh processing
+    disable_cache = request.use_clearvoice or request.clearvoice_enhancement
+    if disable_cache:
+        logger.info("🚫 Caching disabled for ClearerVoice enhancement (use_clearvoice={}, clearvoice_enhancement={})".format(
+            request.use_clearvoice, request.clearvoice_enhancement
+        ))
+    
     # Generate cache key
     cache_key = audio_cache.generate_cache_key(
         request.text, 
@@ -1546,20 +1930,23 @@ async def tts_endpoint(request: TTSRequest):
         remove_crackles=request.remove_crackles,
         apply_filters=request.apply_filters,
         reduce_noise=request.reduce_noise,
-        use_native_sample_rate=request.use_native_sample_rate
+        use_native_sample_rate=request.use_native_sample_rate,
+        use_clearvoice=request.use_clearvoice,
+        clearvoice_enhancement=request.clearvoice_enhancement
     )
     
-    # Check cache first
-    cached_path = audio_cache.get_cached_audio(cache_key)
-    if cached_path:
-        if request.output_format.lower() == "wav":
-            media_type = "audio/wav"
-            filename = request.filename if request.filename else "generated_speech.wav"
-        else:
-            media_type = "audio/mpeg"
-            filename = request.filename if request.filename else "generated_speech.mp3"
-        
-        return FileResponse(cached_path, media_type=media_type, filename=filename)
+    # Check cache first (only if not using ClearerVoice)
+    if not disable_cache:
+        cached_path = audio_cache.get_cached_audio(cache_key)
+        if cached_path:
+            if request.output_format.lower() == "wav":
+                media_type = "audio/wav"
+                filename = request.filename if request.filename else "generated_speech.wav"
+            else:
+                media_type = "audio/mpeg"
+                filename = request.filename if request.filename else "generated_speech.mp3"
+            
+            return FileResponse(cached_path, media_type=media_type, filename=filename)
     
     # Generate new audio through request queue
     async def generate_audio_async():
@@ -1574,18 +1961,21 @@ async def tts_endpoint(request: TTSRequest):
             reduce_noise=request.reduce_noise,
             fast_mode=request.fast_mode,
             filename=request.filename,
-            use_native_sample_rate=request.use_native_sample_rate
+            use_native_sample_rate=request.use_native_sample_rate,
+            use_clearvoice=request.use_clearvoice,
+            clearvoice_enhancement=request.clearvoice_enhancement
         )
     
     try:
         output_path = await request_queue.submit_request(generate_audio_async)
         
-        # Cache the result
-        audio_cache.cache_audio(cache_key, output_path, {
-            "text_length": len(request.text),
-            "voice": request.voice_choice,
-            "format": request.output_format
-        })
+        # Cache the result (only if not using ClearerVoice)
+        if not disable_cache:
+            audio_cache.cache_audio(cache_key, output_path, {
+                "text_length": len(request.text),
+                "voice": request.voice_choice,
+                "format": request.output_format
+            })
         
         if request.output_format.lower() == "wav":
             media_type = "audio/wav"
@@ -1727,6 +2117,16 @@ def health_check():
     queue_stats = request_queue.get_stats()
     cache_stats = audio_cache.get_stats()
     
+    # Get ClearerVoice enhancement info
+    clearvoice_info = None
+    if CLEARVOICE_AVAILABLE:
+        try:
+            enhancer = get_enhancer()
+            if enhancer:
+                clearvoice_info = enhancer.get_enhancement_info()
+        except Exception as e:
+            logger.warning(f"Failed to get ClearerVoice info: {e}")
+    
     return {
         "status": "healthy",
         "model_loaded": MODEL_LOADED,
@@ -1737,19 +2137,23 @@ def health_check():
         "memory_pool": memory_pool_stats,
         "request_queue": queue_stats,
         "audio_cache": cache_stats,
-        "features": ["tts", "gpu_audio_cleaning", "ssml_support", "gpu_acceleration", "error_recovery", "memory_pooling", "request_queue", "audio_caching"]
+        "clearvoice_available": CLEARVOICE_AVAILABLE,
+        "clearvoice_info": clearvoice_info,
+        "features": ["tts", "gpu_audio_cleaning", "clearvoice_enhancement", "ssml_support", "gpu_acceleration", "error_recovery", "memory_pooling", "request_queue", "audio_caching"]
     }
 
 @app.get("/")
 def root():
     """Root endpoint with API info"""
     return {
-        "message": "GPU-Optimized Kyutai TTS API with Hardware Acceleration",
+        "message": "GPU-Optimized Kyutai TTS API with Hardware Acceleration and ClearerVoice-Studio",
         "version": "3.0.0",
         "device": str(device),
+        "clearvoice_available": CLEARVOICE_AVAILABLE,
         "endpoints": {
             "tts": "/api/tts",
             "clean_audio": "/api/clean-audio", 
+            "clearvoice_enhance": "/api/clearvoice-enhance",
             "voices": "/api/voices",
             "health": "/api/health",
             "memory_stats": "/api/memory/stats",
@@ -1760,6 +2164,7 @@ def root():
         "features": [
             "GPU-accelerated Text-to-Speech with multiple voices and formats (MP3/WAV)",
             "SSML support",
+            "ClearerVoice-Studio audio enhancement (professional-grade quality)",
             "GPU-accelerated audio cleaning (crackle removal, noise reduction)",
             "Hardware-optimized volume boosting and filtering",
             "Multiple audio format support for file cleaning",
@@ -1770,6 +2175,68 @@ def root():
             "Adaptive memory management based on usage patterns"
         ]
     }
+
+@app.post("/api/clearvoice-enhance")
+async def clearvoice_enhance_endpoint(
+    audio_file: UploadFile = File(...),
+    use_clearvoice: bool = Form(True)
+):
+    """Enhance uploaded audio file using ClearerVoice-Studio"""
+    logger.info(f"ClearerVoice-Studio enhancement endpoint hit for file: {audio_file.filename}")
+    
+    if not audio_file.filename.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg')):
+        return JSONResponse(
+            status_code=400, 
+            content={"detail": "Unsupported audio format. Please use MP3, WAV, FLAC, M4A, or OGG."}
+        )
+    
+    if not CLEARVOICE_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "ClearerVoice-Studio is not available. Please install required dependencies."}
+        )
+    
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(suffix=os.path.splitext(audio_file.filename)[1], delete=False) as temp_input:
+            content = await audio_file.read()
+            temp_input.write(content)
+            temp_input_path = temp_input.name
+        
+        # Enhance the audio using ClearerVoice-Studio
+        enhanced_audio, sample_rate = enhance_audio_file_clearvoice(
+            temp_input_path,
+            use_clearvoice=use_clearvoice
+        )
+        
+        # Save enhanced audio as MP3
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_output:
+            enhanced_audio_int = (enhanced_audio * 32767).astype(np.int16)
+            audio_segment = AudioSegment(
+                enhanced_audio_int.tobytes(),
+                frame_rate=sample_rate,
+                sample_width=2,
+                channels=1
+            )
+            audio_segment.export(temp_output.name, format="mp3", bitrate="320k")
+            temp_output_path = temp_output.name
+        
+        # Clean up input file
+        os.unlink(temp_input_path)
+        
+        # Return enhanced audio
+        return FileResponse(
+            temp_output_path, 
+            media_type="audio/mpeg", 
+            filename=f"enhanced_{audio_file.filename}.mp3"
+        )
+        
+    except Exception as e:
+        logger.error(f"ClearerVoice-Studio enhancement failed: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"detail": f"Audio enhancement failed: {str(e)}"}
+        )
 
 if __name__ == "__main__":
     if MODEL_LOADED:

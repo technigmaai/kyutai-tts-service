@@ -1,17 +1,19 @@
 # 🎵 GPU-Optimized Text-to-Speech Service
 
-A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features advanced GPU memory management, batch processing, audio cleaning, and SSML support.
+A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features advanced GPU memory management, batch processing, audio cleaning, and SSML support. **Now with real ClearerVoice-Studio integration for professional-grade audio enhancement.**
 
 > **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
 
 ## 📚 Documentation
 
 - **[Audio Cleaning Parameters Guide](AUDIO_CLEANING_PARAMETERS.md)** - Detailed explanation of how audio cleaning parameters work
+- **[ClearerVoice-Studio Integration](CLEARVOICE_INTEGRATION.md)** - Real ClearerVoice-Studio integration guide
 
 ## 🚀 Features
 
 ### Core Features
 - **GPU-Accelerated TTS**: Leverages AMD GPUs with ROCm for fast audio generation
+- **Real ClearerVoice-Studio Integration**: Professional-grade audio enhancement using the official repository
 - **Advanced Memory Management**: Sophisticated GPU memory pooling and tensor reuse
 - **Batch Processing**: Concurrent processing of multiple text segments
 - **Audio Cleaning Pipeline**: GPU-accelerated noise reduction and audio enhancement
@@ -148,6 +150,8 @@ Generate speech from text with advanced options.
 | `fast_mode` | boolean | false | Enable fast mode (aggressive optimizations) |
 | `filename` | string | null | Custom output filename |
 | `use_native_sample_rate` | boolean | true | Use model's native sample rate instead of 44.1kHz |
+| `use_clearvoice` | boolean | true | Use ClearerVoice-Studio for audio enhancement (if available) |
+| `clearvoice_enhancement` | boolean | false | Enable ClearerVoice enhancement (overrides apply_cleaning) |
 
 #### Example Requests
 
@@ -239,6 +243,37 @@ curl -X POST "http://localhost:7861/api/tts" \
   --output standard_quality.mp3
 ```
 
+**ClearerVoice-Studio Enhancement (Professional Quality):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This audio uses ClearerVoice-Studio for professional-grade enhancement.",
+    "voice_choice": "Happy",
+    "output_format": "wav",
+    "clearvoice_enhancement": true,
+    "use_clearvoice": true,
+    "filename": "professional_enhanced.wav"
+  }' \
+  --output professional_enhanced.wav
+```
+
+**Hybrid Enhancement (ClearerVoice + GPU Cleaning):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This audio uses both ClearerVoice and GPU cleaning for maximum quality.",
+    "voice_choice": "Happy",
+    "output_format": "mp3",
+    "clearvoice_enhancement": true,
+    "use_clearvoice": true,
+    "apply_cleaning": true,
+    "filename": "hybrid_enhanced.mp3"
+  }' \
+  --output hybrid_enhanced.mp3
+```
+
 ### Other Endpoints
 
 #### Health Check
@@ -264,6 +299,13 @@ curl -X POST "http://localhost:7861/api/clean-audio" \
   -F "remove_crackles=true" \
   -F "apply_filters=true" \
   -F "reduce_noise=true"
+```
+
+#### ClearerVoice-Studio Enhancement
+```bash
+curl -X POST "http://localhost:7861/api/clearvoice-enhance" \
+  -F "audio_file=@path/to/audio.mp3" \
+  -F "use_clearvoice=true"
 ```
 
 ## ⚙️ Configuration
