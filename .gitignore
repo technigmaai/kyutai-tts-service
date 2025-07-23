@@ -83,9 +83,7 @@ model_cache/
 checkpoint/
 
 # ClearerVoice-Studio repository
-clearvoice_studio/
 clearvoice/
-clearvoice_studio/**
 clearvoice/**
 
 # Audio cache
