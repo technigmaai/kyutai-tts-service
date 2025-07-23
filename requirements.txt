@@ -30,6 +30,12 @@ python-multipart>=0.0.20
 # TTS Model dependencies
 moshi==0.2.11
 
+# ClearerVoice-Studio dependencies
+modelscope>=1.9.5
+transformers>=4.35.0
+accelerate>=0.24.0
+diffusers>=0.24.0
+
 # Note: kyutai-tts is not available in the PyTorch2 environment
 # You may need to install it separately or use an alternative TTS library
 # kyutai-tts>=0.1.0 
