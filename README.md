@@ -147,6 +147,7 @@ Generate speech from text with advanced options.
 | `reduce_noise` | boolean | true | Reduce background noise |
 | `fast_mode` | boolean | false | Enable fast mode (aggressive optimizations) |
 | `filename` | string | null | Custom output filename |
+| `use_native_sample_rate` | boolean | true | Use model's native sample rate instead of 44.1kHz |
 
 #### Example Requests
 
@@ -206,6 +207,36 @@ curl -X POST "http://localhost:7861/api/tts" \
     "filename": "multi_voice.mp3"
   }' \
   --output multi_voice.mp3
+```
+
+**Native Sample Rate (Maximum Quality):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This audio uses the model's native sample rate for maximum quality.",
+    "voice_choice": "Happy",
+    "output_format": "wav",
+    "use_native_sample_rate": true,
+    "apply_cleaning": false,
+    "filename": "native_quality.wav"
+  }' \
+  --output native_quality.wav
+```
+
+**Standard Sample Rate (Compatibility):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This audio uses standard 44.1kHz for maximum compatibility.",
+    "voice_choice": "Happy",
+    "output_format": "mp3",
+    "use_native_sample_rate": false,
+    "apply_cleaning": true,
+    "filename": "standard_quality.mp3"
+  }' \
+  --output standard_quality.mp3
 ```
 
 ### Other Endpoints

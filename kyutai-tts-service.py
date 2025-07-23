@@ -1088,7 +1088,7 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                                 apply_cleaning: bool = False, volume_boost: float = 6.0, 
                                 remove_crackles: bool = True, apply_filters: bool = True, 
                                 reduce_noise: bool = True, fast_mode: bool = False, 
-                                filename: str = None) -> str:
+                                filename: str = None, use_native_sample_rate: bool = True) -> str:
     """Generate audio with maximum GPU utilization through batching and concurrency"""
     global ENABLE_BATCH_PROCESSING  # Fix scoping issue
     
@@ -1396,7 +1396,30 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
 
         logger.info("🎚️  Normalizing final audio...")
         final_audio = final_audio.normalize()
-        final_audio = final_audio.set_frame_rate(44100).set_sample_width(2).set_channels(1)
+        
+        # Sample rate handling based on user preference
+        if use_native_sample_rate:
+            # Use model's native sample rate for maximum quality
+            model_sample_rate = tts_model.mimi.sample_rate
+            logger.info(f"🎵 Using model's native sample rate: {model_sample_rate} Hz")
+            
+            # Only convert if different from model's native rate
+            if final_audio.frame_rate != model_sample_rate:
+                logger.info(f"🔄 Converting from {final_audio.frame_rate} Hz to {model_sample_rate} Hz")
+                final_audio = final_audio.set_frame_rate(model_sample_rate)
+            else:
+                logger.info(f"✅ Audio already at model's native sample rate: {model_sample_rate} Hz")
+        else:
+            # Force standard 44.1kHz for compatibility
+            logger.info(f"🎵 Using standard sample rate: 44100 Hz")
+            if final_audio.frame_rate != 44100:
+                logger.info(f"🔄 Converting from {final_audio.frame_rate} Hz to 44100 Hz")
+                final_audio = final_audio.set_frame_rate(44100)
+            else:
+                logger.info(f"✅ Audio already at standard sample rate: 44100 Hz")
+        
+        # Set standard bit depth and channels
+        final_audio = final_audio.set_sample_width(2).set_channels(1)
         
         # CONCURRENT GPU CLEANING for maximum utilization
         if apply_cleaning and ENABLE_CONCURRENT_CLEANING:
@@ -1493,6 +1516,7 @@ class TTSRequest(BaseModel):
     reduce_noise: bool = True
     fast_mode: bool = False  # Skip audio cleaning for maximum speed
     filename: str = None  # Allow custom filename for output
+    use_native_sample_rate: bool = True  # Use model's native sample rate instead of 44.1kHz
 
 class AudioCleaningRequest(BaseModel):
     volume_boost: float = 6.0
@@ -1521,7 +1545,8 @@ async def tts_endpoint(request: TTSRequest):
         volume_boost=request.volume_boost,
         remove_crackles=request.remove_crackles,
         apply_filters=request.apply_filters,
-        reduce_noise=request.reduce_noise
+        reduce_noise=request.reduce_noise,
+        use_native_sample_rate=request.use_native_sample_rate
     )
     
     # Check cache first
@@ -1548,7 +1573,8 @@ async def tts_endpoint(request: TTSRequest):
             apply_filters=request.apply_filters,
             reduce_noise=request.reduce_noise,
             fast_mode=request.fast_mode,
-            filename=request.filename
+            filename=request.filename,
+            use_native_sample_rate=request.use_native_sample_rate
         )
     
     try:
