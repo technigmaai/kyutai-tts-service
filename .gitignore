@@ -82,9 +82,7 @@ models/
 model_cache/
 checkpoint/
 
-# ClearerVoice-Studio repository
-clearvoice/
-clearvoice/**
+
 
 # Audio cache
 /tmp/tts_cache/
