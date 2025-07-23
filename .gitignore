@@ -133,4 +133,6 @@ memory_dump/
 # Backup files
 *.bak
 *.backup
-*.old 
+*.old
+clearvoice_studio/
+clearvoice_studio/*
