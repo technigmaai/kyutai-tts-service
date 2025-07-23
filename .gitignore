@@ -69,11 +69,24 @@ logs/
 .cache/
 cache/
 
-# Model files (if any)
+# Model files and checkpoints
 *.pth
 *.pt
 *.ckpt
 *.safetensors
+*.bin
+*.model
+*.weights
+checkpoints/
+models/
+model_cache/
+checkpoint/
+
+# ClearerVoice-Studio repository
+clearvoice_studio/
+clearvoice/
+clearvoice_studio/**
+clearvoice/**
 
 # Audio cache
 /tmp/tts_cache/
@@ -82,11 +95,46 @@ tts_cache/
 # Test outputs
 test_*.mp3
 test_*.wav
+test_*.flac
+test_*.m4a
+test_*.ogg
 generated_speech.mp3
 my_audio_file.mp3
 test_wav_file.wav
 test_custom_filename.mp3
-my_audio_file.mp3
 test_wav_new_param.wav
 ssml_test_output.mp3
-xxx.mp3 
+xxx.mp3
+enhanced_*.mp3
+fixed_*.mp3
+restored_*.mp3
+
+# Temporary audio files
+/tmp/*.mp3
+/tmp/*.wav
+/tmp/*.flac
+/tmp/*.m4a
+/tmp/*.ogg
+
+# GPU memory dumps
+*.dump
+memory_dump/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Environment files
+.env.local
+.env.production
+.env.staging
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*.old 

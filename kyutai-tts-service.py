@@ -176,6 +176,8 @@ class ClearerVoiceEnhancer:
                     # Clean up temporary file
                     os.unlink(temp_path)
                     
+
+                    
                     logger.info("✅ Audio enhanced successfully with real ClearerVoice-Studio")
                     return enhanced_audio, sample_rate
                 except Exception as e:
@@ -1760,11 +1762,14 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
         # Set standard bit depth and channels
         final_audio = final_audio.set_sample_width(2).set_channels(1)
         
-        # ClearerVoice-Studio Enhancement (if enabled and available)
+        # COMPLETE AUDIO OPTIMIZATION - Apply enhancement to the entire audio
+        logger.info("🎵 Starting complete audio optimization...")
+        
+        # Step 1: ClearerVoice-Studio Enhancement (if enabled and available)
         if (clearvoice_enhancement or use_clearvoice) and CLEARVOICE_AVAILABLE:
             try:
                 clearvoice_start = time.time()
-                logger.info(f"🎵 Applying ClearerVoice-Studio enhancement (use_clearvoice={use_clearvoice}, clearvoice_enhancement={clearvoice_enhancement})...")
+                logger.info(f"🎵 Applying ClearerVoice-Studio enhancement to complete audio (use_clearvoice={use_clearvoice}, clearvoice_enhancement={clearvoice_enhancement})...")
                 
                 # Convert AudioSegment to numpy for ClearerVoice processing
                 raw_data = final_audio.raw_data
@@ -1774,35 +1779,47 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 # Get current sample rate
                 current_sample_rate = final_audio.frame_rate
                 
-                # Enhance with ClearerVoice-Studio
-                enhanced_audio, enhanced_sample_rate = enhance_audio_clearvoice(
-                    audio_data, current_sample_rate, use_clearvoice
-                )
+                # Save audio to temporary file for ClearerVoice processing
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                    import soundfile as sf
+                    sf.write(temp_file.name, audio_data, current_sample_rate)
+                    temp_path = temp_file.name
                 
-                # Convert back to AudioSegment
-                enhanced_audio_int = np.clip(enhanced_audio * 32767, -32767, 32767).astype(np.int16)
-                final_audio = AudioSegment(
-                    enhanced_audio_int.tobytes(),
-                    frame_rate=enhanced_sample_rate,
-                    sample_width=2,
-                    channels=1
-                )
-                
-                logger.info(f"🎵 ClearerVoice-Studio enhancement completed in {time.time() - clearvoice_start:.2f}s")
+                try:
+                    # Use the same approach as /api/clearvoice-enhance
+                    enhanced_audio, enhanced_sample_rate = enhance_audio_file_clearvoice(
+                        temp_path, use_clearvoice
+                    )
+                    
+                    # Clean up temporary file
+                    os.unlink(temp_path)
+                    
+                    # Convert back to AudioSegment
+                    enhanced_audio_int = np.clip(enhanced_audio * 32767, -32767, 32767).astype(np.int16)
+                    final_audio = AudioSegment(
+                        enhanced_audio_int.tobytes(),
+                        frame_rate=enhanced_sample_rate,
+                        sample_width=2,
+                        channels=1
+                    )
+                except Exception as e:
+                    # Clean up temporary file on error
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                    logger.warning(f"⚠️ ClearerVoice-Studio enhancement failed: {e}")
+                    logger.info("🔄 Continuing with original audio")
                 
             except Exception as clearvoice_error:
                 logger.warning(f"⚠️ ClearerVoice-Studio enhancement failed: {clearvoice_error}")
                 logger.info("🔄 Continuing with original audio")
-        elif (clearvoice_enhancement or use_clearvoice) and not CLEARVOICE_AVAILABLE:
-            logger.info("⚠️ ClearerVoice-Studio requested but not available, using GPU cleaning instead")
         
-        # CONCURRENT GPU CLEANING for maximum utilization (only if ClearerVoice not used)
-        elif apply_cleaning and ENABLE_CONCURRENT_CLEANING:
+        # Step 2: GPU Cleaning (applied to complete audio, regardless of ClearerVoice)
+        if apply_cleaning:
             try:
                 cleaning_start = time.time()
-                logger.info("🧹 Applying GPU-accelerated cleaning...")
+                logger.info("🧹 Applying GPU-accelerated cleaning to complete audio...")
                 
-                # Use standard cleaning for now to avoid dimension issues
+                # Apply GPU cleaning to the complete audio
                 final_audio = clean_audio_segment_gpu(
                     final_audio, 
                     volume_boost, 
@@ -1812,26 +1829,12 @@ def generate_audio_high_gpu_util(ssml_text: str, default_voice: str, output_form
                 )
                 logger.info(f"🧹 GPU cleaning completed in {time.time() - cleaning_start:.2f}s")
             except Exception as cleaning_error:
-                logger.warning(f"GPU cleaning failed, using standard cleaning: {cleaning_error}")
-                # Fallback to standard cleaning
-                try:
-                    final_audio = clean_audio_segment_gpu(
-                        final_audio, 
-                        volume_boost, 
-                        remove_crackles, 
-                        apply_filters, 
-                        reduce_noise
-                    )
-                except Exception as fallback_error:
-                    logger.error(f"Audio cleaning failed: {fallback_error}")
-                    # Continue without cleaning
-        else:
-            # Standard GPU cleaning
-            try:
-                logger.info("🧹 Applying standard GPU cleaning...")
-                final_audio = clean_audio_segment_gpu(final_audio, volume_boost, remove_crackles, apply_filters, reduce_noise)
-            except Exception as cleaning_error:
                 logger.warning(f"GPU cleaning failed: {cleaning_error}")
+                # Continue without cleaning
+        else:
+            logger.info("⏭️ Skipping GPU cleaning (apply_cleaning=False)")
+        
+        logger.info("✅ Complete audio optimization finished")
         
         # Export
         export_start = time.time()
