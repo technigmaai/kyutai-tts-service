@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# GPU-Optimized Kyutai TTS Service Installation Script
+# GPU-Optimized Kyutai TTS Service Installation Script (Modular Architecture)
 # This script sets up the Kyutai TTS service with all dependencies including ROCm
 
 set -e  # Exit on any error
 
-echo "🎵 GPU-Optimized Kyutai TTS Service Installation"
-echo "=========================================="
+echo "🎵 GPU-Optimized Kyutai TTS Service Installation (Modular)"
+echo "========================================================"
 echo ""
 echo "This script will:"
 echo "1. Check system requirements (Python, existing venv)"
@@ -15,10 +15,11 @@ echo "3. Create a Python virtual environment (.venv)"
 echo "4. Check GPU support (ROCm for AMD GPUs)"
 echo "5. Install PyTorch with ROCm support"
 echo "6. Install all required dependencies"
-echo "7. Verify the installation"
+echo "7. Verify the installation and modular architecture"
 echo "8. Optionally start the service"
 echo ""
 echo "Tested on: Ubuntu 24.04, Python 3.12.10, AMD Strix Halo GPU"
+echo "Architecture: Modular (main.py entry point)"
 echo ""
 
 # Check if Python is installed
@@ -33,6 +34,39 @@ fi
 # Check Python version
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "✅ Python version: $PYTHON_VERSION"
+
+# Check if modular architecture files exist
+echo "🔍 Checking modular architecture files..."
+MISSING_FILES=()
+
+if [ ! -f "main.py" ]; then
+    MISSING_FILES+=("main.py")
+fi
+if [ ! -f "config.py" ]; then
+    MISSING_FILES+=("config.py")
+fi
+if [ ! -d "api" ]; then
+    MISSING_FILES+=("api/")
+fi
+if [ ! -d "tts" ]; then
+    MISSING_FILES+=("tts/")
+fi
+if [ ! -d "audio" ]; then
+    MISSING_FILES+=("audio/")
+fi
+if [ ! -d "utils" ]; then
+    MISSING_FILES+=("utils/")
+fi
+
+if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+    echo "❌ Missing modular architecture components:"
+    printf '   - %s\n' "${MISSING_FILES[@]}"
+    echo ""
+    echo "Please ensure you have the complete modular architecture."
+    exit 1
+else
+    echo "✅ Modular architecture structure verified!"
+fi
 
 # Check if ROCm is installed
 echo "🔍 Checking ROCm installation..."
@@ -204,6 +238,31 @@ else
     echo "   You may need to install ROCm drivers: https://rocmdocs.amd.com/en/latest/deploy/linux/prerequisites.html"
 fi
 
+# Verify modular architecture imports
+echo "🏗️  Verifying modular architecture..."
+MODULAR_VERIFICATION=$(python -c "
+try:
+    import config
+    from utils.ssml_parser import parse_ssml
+    from audio.processing import initialize_zipenhancer
+    from tts.engine import initialize_environment
+    from api.models import TTSRequest
+    from api.routes import router
+    from main import main
+    print('✅ All modular components imported successfully!')
+except ImportError as e:
+    print(f'❌ Modular architecture import failed: {e}')
+    exit(1)
+" 2>&1)
+
+echo "$MODULAR_VERIFICATION"
+if [[ "$MODULAR_VERIFICATION" == *"successfully"* ]]; then
+    echo "✅ Modular architecture verified!"
+else
+    echo "❌ Modular architecture verification failed!"
+    exit 1
+fi
+
 VERIFICATION_OUTPUT=$(python -c "
 import torch
 import fastapi
@@ -229,9 +288,18 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "🎉 Installation completed successfully!"
     echo ""
+    echo "🏗️  Modular Architecture Summary:"
+    echo "   📦 Entry Point: main.py"
+    echo "   ⚙️  Configuration: config.py"
+    echo "   🌐 API Layer: api/ (models.py, routes.py)"
+    echo "   🎤 TTS Engine: tts/engine.py"
+    echo "   🎵 Audio Processing: audio/processing.py"
+    echo "   🛠️  Utilities: utils/ssml_parser.py"
+    echo ""
     echo "🚀 To start the service:"
     echo "   source .venv/bin/activate"
-    echo "   python kyutai-tts-service.py"
+    echo "   python main.py"
+    echo "   OR use: ./start.sh"
     echo ""
     echo "📚 For more information, see README.md"
     echo ""
@@ -240,14 +308,16 @@ if [ $? -eq 0 ]; then
     read -p "Do you want to start the Kyutai TTS service now? (y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "🚀 Starting Kyutai TTS service..."
+        echo "🚀 Starting Kyutai TTS service (modular architecture)..."
+        echo "📡 Service will be available at: http://localhost:7861"
         echo "Press Ctrl+C to stop the service"
         echo ""
-        python kyutai-tts-service.py
+        python main.py
     else
         echo "ℹ️  You can start the service later with:"
         echo "   source .venv/bin/activate"
-        echo "   python kyutai-tts-service.py"
+        echo "   python main.py"
+        echo "   OR use: ./start.sh"
     fi
 else
     echo "❌ Installation verification failed!"

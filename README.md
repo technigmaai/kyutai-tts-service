@@ -1,8 +1,19 @@
-# 🎵 GPU-Optimized Text-to-Speech Service
+# 🎵 GPU-Optimized Text-to-Speech Service (Modular Architecture)
 
-A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features ZipEnhancer noise suppression, SSML support for multiple voices, and optimized processing for AMD GPUs with ROCm.
+A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features ZipEnhancer noise suppression, SSML support for multiple voices, and optimized processing for AMD GPUs with ROCm. **Now with modular architecture for better maintainability and scalability.**
 
 > **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
+
+## 🏗️ Architecture
+
+This service uses a **modular architecture** with clear separation of concerns:
+
+- **`main.py`**: Entry point and service orchestration
+- **`config.py`**: Configuration constants and defaults
+- **`api/`**: FastAPI routes and request/response models
+- **`tts/`**: TTS model loading and audio generation
+- **`audio/`**: ZipEnhancer noise suppression and audio effects
+- **`utils/`**: SSML parsing and utility functions
 
 ## 🚀 Features
 
@@ -14,12 +25,14 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 - **20+ Voice Options**: Various emotional and stylistic voices (Happy, Sad, Angry, Calm, etc.)
 - **Flexible Output**: MP3/WAV formats with custom filenames and quality settings
 - **Memory Management**: Automatic temporary file cleanup and GPU optimization
+- **Modular Design**: Clean, maintainable code structure with separated components
 
 ### Performance Optimizations
 - **ROCm Integration**: Optimized for AMD GPUs with proper environment configuration
 - **Torch Optimization**: Multi-threaded processing with 8 CPU threads
 - **Windowed Processing**: Memory-efficient processing for large audio files
 - **Quality Modes**: Three processing levels (standard/high/ultra) for different use cases
+- **Component Isolation**: Independent modules for easier testing and maintenance
 
 ## 📋 Requirements
 
@@ -49,7 +62,7 @@ cd kyutai-tts-service
 
 ### 2. Quick Installation (Recommended)
 ```bash
-# Run the automated installation script
+# Run the automated installation script (now with modular architecture validation)
 ./install.sh
 ```
 
@@ -97,12 +110,12 @@ python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); 
 
 ### 1. Start the Service
 ```bash
-# Quick start (recommended)
+# Quick start (recommended) - uses modular main.py
 ./start.sh
 
-# Or manual start
+# Or manual start with modular architecture
 source .venv/bin/activate
-python kyutai-tts-service.py
+python main.py
 ```
 
 ### 2. Test the Service
@@ -111,10 +124,10 @@ python kyutai-tts-service.py
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "Hello, this is a test of the TTS service!",
+    "text": "Hello, this is a test of the modular TTS service!",
     "voice_choice": "Happy",
     "output_format": "mp3",
-    "apply_cleaning": true
+    "apply_zipenhancer": true
   }' \
   --output test_output.mp3
 ```
@@ -287,6 +300,15 @@ The service is pre-configured for optimal performance with:
 - **Memory Management**: Automatic temporary file cleanup
 - **Torch Optimization**: 8 threads for CPU operations, optimized interop threads
 
+### Modular Configuration
+
+Configuration is centralized in `config.py`:
+- **Model Settings**: TTS model repository and voice options
+- **GPU Settings**: ROCm environment variables and optimization
+- **Audio Settings**: Default formats, bitrates, and sample rates
+- **ZipEnhancer Settings**: Quality modes and processing parameters
+- **Server Settings**: Host and port configuration
+
 ## 🔧 Advanced Usage
 
 ### SSML Support
@@ -304,12 +326,10 @@ The service supports Speech Synthesis Markup Language (SSML) for advanced voice 
 
 ### SSML Processing
 For multiple text segments, the service automatically:
-1. Parses SSML into voice segments and pauses
-2. Processes each segment with the specified voice
+1. Parses SSML into voice segments and pauses (handled by `utils/ssml_parser.py`)
+2. Processes each segment with the specified voice (handled by `tts/engine.py`)
 3. Reconstructs audio in original order
-4. Applies ZipEnhancer if requested
-
-
+4. Applies ZipEnhancer if requested (handled by `audio/processing.py`)
 
 ### ZipEnhancer Quality Modes
 The service offers three ZipEnhancer processing modes:
@@ -339,6 +359,43 @@ The service offers three ZipEnhancer processing modes:
 - **Smaller windows**: Better quality, more processing time
 - **Larger windows**: Faster processing, potential quality trade-offs
 
+## 🏗️ Modular Architecture Details
+
+The service is organized into logical modules for better maintainability:
+
+### **Entry Point** (`main.py`)
+- Service initialization and startup
+- Model loading coordination
+- FastAPI app configuration
+- Error handling and logging setup
+
+### **Configuration** (`config.py`)
+- All configuration constants and defaults
+- Voice options and model repositories
+- GPU environment settings
+- Performance optimizations
+
+### **API Layer** (`api/`)
+- **`models.py`**: Pydantic request/response models
+- **`routes.py`**: FastAPI endpoint handlers and routing
+
+### **TTS Engine** (`tts/engine.py`)
+- TTS model loading and initialization
+- Audio generation from text/SSML
+- Voice processing and management
+- GPU optimization settings
+
+### **Audio Processing** (`audio/processing.py`)
+- ZipEnhancer noise suppression
+- Audio effects (normalization, volume, fades)
+- Windowed processing for large files
+- Audio format conversion
+
+### **Utilities** (`utils/ssml_parser.py`)
+- SSML parsing and validation
+- WAV header creation for raw audio
+- Text sanitization and processing
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -367,6 +424,9 @@ curl -X POST "http://localhost:7861/api/tts" \
 
 **4. Service Not Starting**
 ```bash
+# Check if all modular components are present
+python -c "from main import main; print('✅ Modular architecture working')"
+
 # Check GPU availability
 python -c "import torch; print(torch.cuda.is_available())"
 
@@ -377,34 +437,82 @@ pip list | grep torch
 echo $HSA_OVERRIDE_GFX_VERSION
 ```
 
+**5. Import Errors (Modular Architecture)**
+```bash
+# Verify all modules can be imported
+python -c "
+import config
+from utils.ssml_parser import parse_ssml
+from audio.processing import initialize_zipenhancer
+from tts.engine import initialize_environment
+from api.models import TTSRequest
+from api.routes import router
+print('✅ All modules imported successfully')
+"
+```
+
 ### Log Analysis
 The service provides detailed logging:
 - **GPU Usage**: Real-time memory and utilization
 - **Processing Time**: Per-segment and total timing
 - **File Operations**: Temporary file creation and cleanup
 - **Error Tracking**: Detailed error messages and stack traces
+- **Module Loading**: Component initialization status
 
 ## 📁 File Structure
 
 ```
 kyutai-tts-service/
-├── kyutai-tts-service.py    # Main service file (469 lines)
-├── simple.py               # Original ZipEnhancer test script
-├── README.md               # This documentation
-├── .gitignore             # Git ignore rules
-├── requirements.txt        # Python dependencies
-├── install.sh             # Automated installation script
-├── start.sh               # Quick start script
-└── .venv/                 # Python virtual environment
+├── main.py                 # 🚀 Service entry point (modular)
+├── config.py              # ⚙️ Configuration constants
+├── api/                    # 🌐 API Layer
+│   ├── __init__.py
+│   ├── models.py          # 📝 Pydantic request/response models
+│   └── routes.py          # 🛣️ FastAPI routes and handlers
+├── tts/                    # 🎤 TTS Engine
+│   ├── __init__.py
+│   └── engine.py          # 🔧 Model loading and audio generation
+├── audio/                  # 🎵 Audio Processing
+│   ├── __init__.py
+│   └── processing.py      # 🎛️ ZipEnhancer and audio effects
+├── utils/                  # 🛠️ Utilities
+│   ├── __init__.py
+│   └── ssml_parser.py     # 📄 SSML parsing and WAV utilities
+├── archive/                # 📦 Legacy files (safely stored)
+│   ├── kyutai-tts-service.py    # Original monolithic service
+│   ├── kyutai-tts-service.py.backup # Backup copy
+│   └── simple.py               # Original ZipEnhancer test
+├── README.md               # 📖 This documentation
+├── .gitignore             # 🚫 Git ignore rules
+├── requirements.txt        # 📋 Python dependencies
+├── install.sh             # 🔧 Automated installation (modular-aware)
+├── start.sh               # ▶️ Quick start script (modular-aware)
+└── .venv/                 # 🐍 Python virtual environment
 ```
+
+## 🔄 Migration from Monolithic Version
+
+If you're upgrading from the previous monolithic version:
+
+1. **Backup**: Original files are automatically moved to `archive/`
+2. **Configuration**: Settings are now centralized in `config.py`
+3. **Startup**: Use `python main.py` or `./start.sh` instead of `kyutai-tts-service.py`
+4. **Functionality**: All features work exactly the same - no API changes
+5. **Benefits**: Better code organization, easier maintenance, improved testing
 
 ## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
+3. Make your changes to the appropriate module
+4. Test thoroughly (individual modules can be tested separately)
 5. Submit a pull request
+
+### Development Guidelines
+- **Keep modules focused**: Each module should have a single responsibility
+- **Update config.py**: Add new configuration constants to the centralized config
+- **Test imports**: Ensure all modules can be imported independently
+- **Follow structure**: Place new functionality in the appropriate module
 
 ## 📄 License
 
@@ -422,12 +530,14 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 For issues and questions:
 1. Check the troubleshooting section
 2. Review the logs for error messages
-3. Open an issue on GitHub
-4. Include system specifications and error details
+3. Verify modular architecture integrity
+4. Open an issue on GitHub
+5. Include system specifications and error details
 
 ---
 
 **Last Updated**: July 27, 2025  
-**Version**: 2.0.0  
+**Version**: 2.0.0 (Modular Architecture)  
 **GPU Optimized**: ✅ (AMD ROCm)  
-**ZipEnhancer Integrated**: ✅ 
+**ZipEnhancer Integrated**: ✅  
+**Architecture**: ✅ Modular (main.py entry point) 

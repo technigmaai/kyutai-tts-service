@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Quick Start Script for Kyutai TTS Service
+# Quick Start Script for Kyutai TTS Service (Modular Architecture)
 # This script activates the virtual environment and starts the service
 
-echo "🎵 Starting GPU-Optimized Kyutai TTS Service"
-echo "====================================="
+echo "🎵 Starting GPU-Optimized Kyutai TTS Service (Modular)"
+echo "==============================================="
 
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then
@@ -17,8 +17,16 @@ echo "🔧 Activating virtual environment..."
 source .venv/bin/activate
 
 # Check if main service file exists
-if [ ! -f "kyutai-tts-service.py" ]; then
-    echo "❌ Service file not found: kyutai-tts-service.py"
+if [ ! -f "main.py" ]; then
+    echo "❌ Service entry point not found: main.py"
+    echo "💡 Make sure you're in the correct directory with the modular architecture."
+    exit 1
+fi
+
+# Check if config file exists
+if [ ! -f "config.py" ]; then
+    echo "❌ Configuration file not found: config.py"
+    echo "💡 The modular architecture requires config.py to be present."
     exit 1
 fi
 
@@ -34,12 +42,21 @@ else:
 "
 
 echo ""
+echo "🏗️  Modular Architecture Components:"
+echo "   📦 Main Entry Point: main.py"
+echo "   ⚙️  Configuration: config.py"
+echo "   🌐 API Layer: api/"
+echo "   🎤 TTS Engine: tts/"
+echo "   🎵 Audio Processing: audio/"
+echo "   🛠️  Utilities: utils/"
+echo ""
 echo "🚀 Starting Kyutai TTS service..."
-echo "📡 Service will be available at: http://localhost:8000"
-echo "📚 API documentation: http://localhost:8000/docs"
+echo "📡 Service will be available at: http://localhost:7861"
+echo "📚 API documentation: http://localhost:7861/docs"
+echo "🔧 ZipEnhancer status: http://localhost:7861/api/zipenhancer/status"
 echo ""
 echo "Press Ctrl+C to stop the service"
 echo ""
 
-# Start the service
-python3 kyutai-tts-service.py 
+# Start the service with the new modular entry point
+python3 main.py 
