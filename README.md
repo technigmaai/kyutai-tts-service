@@ -9,10 +9,11 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 ### Core Features
 - **GPU-Accelerated TTS**: Leverages AMD GPUs with ROCm for fast audio generation
 - **ZipEnhancer Noise Suppression**: Advanced acoustic noise suppression with windowed processing for superior quality
+- **Audio Processing Effects**: Normalization, volume boost, fade-in/out effects, and custom bitrate control
 - **SSML Support**: Voice control, pauses, and speech synthesis markup for multiple voices
 - **20+ Voice Options**: Various emotional and stylistic voices (Happy, Sad, Angry, Calm, etc.)
+- **Flexible Output**: MP3/WAV formats with custom filenames and quality settings
 - **Memory Management**: Automatic temporary file cleanup and GPU optimization
-- **Professional Audio**: 44.1kHz/16-bit MP3 output with 320k bitrate
 
 ### Performance Optimizations
 - **ROCm Integration**: Optimized for AMD GPUs with proper environment configuration
@@ -135,6 +136,11 @@ Generate speech from text with advanced options.
 | `apply_zipenhancer` | boolean | false | Enable ZipEnhancer noise suppression post-processing |
 | `zipenhancer_quality` | string | "high" | ZipEnhancer quality mode: "standard", "high", "ultra" |
 | `zipenhancer_window_size` | float | 2.0 | Window size in seconds for windowed processing (1.0-5.0) |
+| `normalize` | boolean | false | Apply audio normalization |
+| `volume_boost` | float | null | Volume boost in decibels (e.g., 5.0, -3.0) |
+| `fade_in` | integer | null | Fade-in duration in milliseconds |
+| `fade_out` | integer | null | Fade-out duration in milliseconds |
+| `bitrate` | string | "320k" | MP3 bitrate (e.g., "128k", "192k", "320k") |
 
 #### Example Requests
 
@@ -227,6 +233,41 @@ curl -X POST "http://localhost:7861/api/tts" \
     "zipenhancer_window_size": 1.0
   }' \
   --output zipenhancer_ultra.mp3
+```
+
+**Audio Processing Effects:**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This audio has normalization, volume boost, and fade effects applied.",
+    "voice_choice": "Happy",
+    "normalize": true,
+    "volume_boost": 5.0,
+    "fade_in": 2000,
+    "fade_out": 3000,
+    "bitrate": "192k"
+  }' \
+  --output processed_audio.mp3
+```
+
+**Complete Enhancement Pipeline:**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Professional audio with ZipEnhancer and post-processing effects.",
+    "voice_choice": "Happy",
+    "output_format": "wav",
+    "apply_zipenhancer": true,
+    "zipenhancer_quality": "high",
+    "normalize": true,
+    "volume_boost": 3.0,
+    "fade_in": 1500,
+    "fade_out": 2000,
+    "filename": "professional_enhanced_audio"
+  }' \
+  --output professional_enhanced_audio.wav
 ```
 
 ### Other Endpoints

@@ -9,6 +9,7 @@ import torch
 from moshi.models.loaders import CheckpointInfo
 from moshi.models.tts import TTSModel
 from pydub import AudioSegment
+from pydub.effects import normalize
 import uvicorn
 import logging
 import re
@@ -364,6 +365,48 @@ def apply_zipenhancer_windowed(audio_path: str, window_seconds: float = 2.0,
             logger.error(f"ZipEnhancer fallback also failed: {fallback_error}")
             return audio_path  # Return original if all enhancement fails
 
+def apply_audio_effects(audio: AudioSegment, normalize_audio: bool = False, 
+                       volume_boost: float = None, fade_in_ms: int = None, 
+                       fade_out_ms: int = None) -> AudioSegment:
+    """
+    Apply audio processing effects to an AudioSegment.
+    
+    :param audio: Input AudioSegment
+    :param normalize_audio: Apply normalization
+    :param volume_boost: Volume boost in decibels
+    :param fade_in_ms: Fade-in duration in milliseconds
+    :param fade_out_ms: Fade-out duration in milliseconds
+    :return: Processed AudioSegment
+    """
+    try:
+        processed_audio = audio
+        
+        # Apply normalization
+        if normalize_audio:
+            logger.info("Applying audio normalization")
+            processed_audio = normalize(processed_audio)
+        
+        # Apply volume boost
+        if volume_boost is not None:
+            logger.info(f"Applying volume boost: {volume_boost} dB")
+            processed_audio = processed_audio.apply_gain(volume_boost)
+        
+        # Apply fade-in
+        if fade_in_ms is not None and fade_in_ms > 0:
+            logger.info(f"Applying fade-in: {fade_in_ms} ms")
+            processed_audio = processed_audio.fade_in(fade_in_ms)
+        
+        # Apply fade-out
+        if fade_out_ms is not None and fade_out_ms > 0:
+            logger.info(f"Applying fade-out: {fade_out_ms} ms")
+            processed_audio = processed_audio.fade_out(fade_out_ms)
+        
+        return processed_audio
+        
+    except Exception as e:
+        logger.error(f"Error applying audio effects: {e}")
+        return audio  # Return original audio if effects fail
+
 def apply_zipenhancer(audio_path: str, use_advanced_processing: bool = True, 
                      window_seconds: float = 2.0) -> str:
     """
@@ -415,7 +458,9 @@ def apply_zipenhancer(audio_path: str, use_advanced_processing: bool = True,
 
 def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3",
                   apply_zipenhancer_enhancement: bool = False, zipenhancer_quality: str = "high", 
-                  zipenhancer_window_size: float = 2.0) -> str:
+                  zipenhancer_window_size: float = 2.0, normalize_audio: bool = False,
+                  volume_boost: float = None, fade_in_ms: int = None, fade_out_ms: int = None,
+                  bitrate: str = "320k") -> str:
     """
     Generates an audio file from an SSML or plain text string in MP3 or WAV format.
     Optionally applies ZipEnhancer noise suppression as post-processing.
@@ -485,8 +530,17 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
             os.remove(temp_wav_path)  # Remove original temp file
             temp_wav_path = enhanced_wav_path
     
-    # Load the final audio (potentially enhanced) and export in requested format
+    # Load the final audio (potentially enhanced) and apply audio effects
     final_enhanced_audio = AudioSegment.from_wav(temp_wav_path)
+    
+    # Apply audio processing effects
+    processed_audio = apply_audio_effects(
+        final_enhanced_audio,
+        normalize_audio=normalize_audio,
+        volume_boost=volume_boost,
+        fade_in_ms=fade_in_ms,
+        fade_out_ms=fade_out_ms
+    )
     
     # Validate output format
     if output_format.lower() not in ["mp3", "wav"]:
@@ -498,9 +552,9 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
     
     with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as output_fp:
         if output_format == "mp3":
-            final_enhanced_audio.export(output_fp.name, format="mp3", bitrate="320k")
+            processed_audio.export(output_fp.name, format="mp3", bitrate=bitrate)
         else:  # wav
-            final_enhanced_audio.export(output_fp.name, format="wav")
+            processed_audio.export(output_fp.name, format="wav")
         
         logger.info(f"Final audio successfully exported to {output_fp.name} (format: {output_format.upper()})")
         
@@ -518,6 +572,12 @@ class TTSRequest(BaseModel):
     apply_zipenhancer: bool = False  # Enable ZipEnhancer post-processing
     zipenhancer_quality: str = "high"  # Quality mode: "standard", "high", "ultra"
     zipenhancer_window_size: float = 2.0  # Window size in seconds for advanced processing
+    # Audio processing parameters
+    normalize: bool = False  # Apply audio normalization
+    volume_boost: float = None  # Volume boost in decibels
+    fade_in: int = None  # Fade-in duration in milliseconds
+    fade_out: int = None  # Fade-out duration in milliseconds
+    bitrate: str = "320k"  # MP3 bitrate (e.g., "128k", "192k", "320k")
 
 @app.post("/api/tts")
 def tts_endpoint(request: TTSRequest):
@@ -533,7 +593,12 @@ def tts_endpoint(request: TTSRequest):
             output_format=request.output_format,
             apply_zipenhancer_enhancement=request.apply_zipenhancer,
             zipenhancer_quality=request.zipenhancer_quality,
-            zipenhancer_window_size=request.zipenhancer_window_size
+            zipenhancer_window_size=request.zipenhancer_window_size,
+            normalize_audio=request.normalize,
+            volume_boost=request.volume_boost,
+            fade_in_ms=request.fade_in,
+            fade_out_ms=request.fade_out,
+            bitrate=request.bitrate
         )
         
         # Set correct media type and filename based on output format
