@@ -18,7 +18,11 @@ psutil>=7.0.0
 # Audio processing
 pydub>=0.25.1
 librosa==0.10.2.post1
+<<<<<<< Updated upstream
 numpy>=1.26.4
+=======
+numpy>=1.26,<2.0
+>>>>>>> Stashed changes
 scipy>=1.16.0
 sphn>=0.1.0
 soundfile>=0.12.0
@@ -30,6 +34,7 @@ python-multipart>=0.0.20
 # TTS Model dependencies
 moshi==0.2.11
 
+<<<<<<< Updated upstream
 # ClearerVoice-Studio dependencies
 modelscope>=1.9.5
 transformers>=4.35.0
@@ -41,3 +46,11 @@ peft==0.16.0
 # Note: kyutai-tts is not available in the PyTorch2 environment
 # You may need to install it separately or use an alternative TTS library
 # kyutai-tts>=0.1.0 
+=======
+# ZipEnhancer Speech Denoising dependencies
+modelscope>=1.9.5
+simplejson>=3.19.1
+datasets==2.18.0
+addict==2.4.0
+sortedcontainers==2.4.0
+>>>>>>> Stashed changes
