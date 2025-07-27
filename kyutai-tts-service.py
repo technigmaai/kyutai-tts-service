@@ -16,6 +16,27 @@ import os
 import html
 from xml.etree import ElementTree as ET
 
+# Torch optimization and GPU setup (from simple.py)
+torch.set_num_threads(8)
+torch.set_num_interop_threads(8)
+
+# GPU environment setup for AMD ROCm (from simple.py)
+os.environ["MIOPEN_FIND_MODE"] = "FAST"
+os.environ["MIOPEN_USER_DB_PATH"] = os.path.expanduser("./miopen_cache")
+os.environ["HSA_OVERRIDE_GFX_VERSION"] = "11.0.0"
+
+# ZipEnhancer imports (from simple.py)
+try:
+    from modelscope.pipelines import pipeline
+    from modelscope.utils.constant import Tasks
+    ZIPENHANCER_AVAILABLE = True
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.info("ZipEnhancer noise suppression available")
+except ImportError as e:
+    ZIPENHANCER_AVAILABLE = False
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.warning(f"ZipEnhancer not available: {e}")
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -27,6 +48,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # --- Model Loading ---
 MODEL_LOADED = False
 tts_model = None
+zipenhancer_pipeline = None
+
 try:
     # Model loading configuration
     MODEL_REPO = "kyutai/tts-1.6b-en_fr"
@@ -41,7 +64,21 @@ try:
     tts_model = TTSModel.from_checkpoint_info(checkpoint_info, n_q=32, temp=0.6, device=device)
     tts_model.voice_repo = VOICE_REPO
     MODEL_LOADED = True
-    logger.info("Model loaded successfully.")
+    logger.info("TTS Model loaded successfully.")
+    
+    # Initialize ZipEnhancer pipeline (from simple.py)
+    if ZIPENHANCER_AVAILABLE:
+        try:
+            zipenhancer_pipeline = pipeline(
+                Tasks.acoustic_noise_suppression,
+                model='iic/speech_zipenhancer_ans_multiloss_16k_base'
+            )
+            logger.info("ZipEnhancer pipeline loaded successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to load ZipEnhancer pipeline: {e}")
+            zipenhancer_pipeline = None
+            ZIPENHANCER_AVAILABLE = False
+    
 except Exception as e:
     MODEL_LOADED = False
     logger.exception(f"FATAL: Error loading model: {e}")
@@ -128,9 +165,39 @@ def parse_ssml(ssml_text: str, default_voice: str):
     logger.info(f"Parsed into {len(segments)} segments.")
     return segments
 
-def generate_audio(ssml_text: str, default_voice: str) -> str:
+def apply_zipenhancer(audio_path: str) -> str:
+    """
+    Apply ZipEnhancer noise suppression to audio file.
+    Returns path to enhanced audio file.
+    """
+    if not ZIPENHANCER_AVAILABLE or not zipenhancer_pipeline:
+        logger.warning("ZipEnhancer not available, skipping noise suppression")
+        return audio_path
+    
+    try:
+        logger.info("Applying ZipEnhancer noise suppression...")
+        
+        # Create temporary output file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as enhanced_fp:
+            enhanced_path = enhanced_fp.name
+        
+        # Apply noise suppression using ZipEnhancer
+        result = zipenhancer_pipeline(
+            audio_path,
+            output_path=enhanced_path
+        )
+        
+        logger.info(f"ZipEnhancer processing completed: {enhanced_path}")
+        return enhanced_path
+        
+    except Exception as e:
+        logger.error(f"ZipEnhancer processing failed: {e}")
+        return audio_path  # Return original if enhancement fails
+
+def generate_audio(ssml_text: str, default_voice: str, apply_zipenhancer_enhancement: bool = False) -> str:
     """
     Generates an MP3 audio file from an SSML or plain text string.
+    Optionally applies ZipEnhancer noise suppression as post-processing.
     """
     if not MODEL_LOADED:
         logger.error("Cannot generate audio: Model is not loaded.")
@@ -174,24 +241,52 @@ def generate_audio(ssml_text: str, default_voice: str) -> str:
 
     final_audio = final_audio.set_frame_rate(44100).set_sample_width(2).set_channels(1)
     
+    # Export to temporary WAV for potential ZipEnhancer processing
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+        final_audio.export(temp_wav.name, format="wav")
+        temp_wav_path = temp_wav.name
+    
+    # Apply ZipEnhancer if requested
+    if apply_zipenhancer_enhancement:
+        logger.info("Applying ZipEnhancer post-processing...")
+        enhanced_wav_path = apply_zipenhancer(temp_wav_path)
+        
+        # If enhancement was successful and created a new file, use it
+        if enhanced_wav_path != temp_wav_path:
+            os.remove(temp_wav_path)  # Remove original temp file
+            temp_wav_path = enhanced_wav_path
+    
+    # Load the final audio (potentially enhanced) and export as MP3
+    final_enhanced_audio = AudioSegment.from_wav(temp_wav_path)
+    
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_fp:
-        final_audio.export(mp3_fp.name, format="mp3", bitrate="320k")
+        final_enhanced_audio.export(mp3_fp.name, format="mp3", bitrate="320k")
         logger.info(f"Final audio successfully exported to {mp3_fp.name}")
+        
+        # Cleanup temporary WAV file
+        os.remove(temp_wav_path)
+        
         return mp3_fp.name
 
 # --- API Endpoint ---
 class TTSRequest(BaseModel):
     text: str
     voice_choice: str = DEFAULT_VOICE
+    apply_zipenhancer: bool = False  # New parameter for ZipEnhancer post-processing
 
 @app.post("/api/tts")
 def tts_endpoint(request: TTSRequest):
     """
     Handles TTS requests. Returns an audio file on success or a JSON error on failure.
+    Now supports optional ZipEnhancer noise suppression post-processing.
     """
     logger.info("TTS API endpoint hit.")
     try:
-        output_path = generate_audio(request.text, request.voice_choice)
+        output_path = generate_audio(
+            request.text, 
+            request.voice_choice, 
+            apply_zipenhancer_enhancement=request.apply_zipenhancer
+        )
         return FileResponse(output_path, media_type="audio/mpeg", filename="generated_speech.mp3")
     except ValueError as e:
         logger.error(f"Invalid input provided: {e}")
@@ -199,6 +294,16 @@ def tts_endpoint(request: TTSRequest):
     except Exception as e:
         logger.exception("An internal error occurred during audio generation.")
         return JSONResponse(status_code=500, content={"detail": f"An internal error occurred: {str(e)}"})
+
+@app.get("/api/zipenhancer/status")
+def zipenhancer_status():
+    """
+    Returns the status of ZipEnhancer availability.
+    """
+    return {
+        "zipenhancer_available": ZIPENHANCER_AVAILABLE,
+        "pipeline_loaded": zipenhancer_pipeline is not None
+    }
 
 # --- Main Execution ---
 if __name__ == "__main__":

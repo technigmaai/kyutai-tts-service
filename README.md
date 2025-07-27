@@ -14,6 +14,7 @@ A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with Fast
 ### Core Features
 - **GPU-Accelerated TTS**: Leverages AMD GPUs with ROCm for fast audio generation
 - **Real ClearerVoice-Studio Integration**: Professional-grade audio enhancement using the official repository
+- **ZipEnhancer Noise Suppression**: Advanced acoustic noise suppression using ModelScope's ZipEnhancer
 - **Advanced Memory Management**: Sophisticated GPU memory pooling and tensor reuse
 - **Batch Processing**: Concurrent processing of multiple text segments
 - **Audio Cleaning Pipeline**: GPU-accelerated noise reduction and audio enhancement
@@ -152,6 +153,7 @@ Generate speech from text with advanced options.
 | `use_native_sample_rate` | boolean | true | Use model's native sample rate instead of 44.1kHz |
 | `use_clearvoice` | boolean | true | Use ClearerVoice-Studio for audio enhancement (if available) |
 | `clearvoice_enhancement` | boolean | false | Enable ClearerVoice enhancement (overrides apply_cleaning) |
+| `apply_zipenhancer` | boolean | false | Enable ZipEnhancer noise suppression post-processing |
 
 #### Example Requests
 
@@ -274,6 +276,20 @@ curl -X POST "http://localhost:7861/api/tts" \
   --output hybrid_enhanced.mp3
 ```
 
+**ZipEnhancer Noise Suppression (New Feature):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This audio uses ZipEnhancer for advanced acoustic noise suppression.",
+    "voice_choice": "Happy",
+    "output_format": "mp3",
+    "apply_zipenhancer": true,
+    "filename": "zipenhancer_enhanced.mp3"
+  }' \
+  --output zipenhancer_enhanced.mp3
+```
+
 ### Other Endpoints
 
 #### Health Check
@@ -306,6 +322,11 @@ curl -X POST "http://localhost:7861/api/clean-audio" \
 curl -X POST "http://localhost:7861/api/clearvoice-enhance" \
   -F "audio_file=@path/to/audio.mp3" \
   -F "use_clearvoice=true"
+```
+
+#### ZipEnhancer Status Check
+```bash
+curl "http://localhost:7861/api/zipenhancer/status"
 ```
 
 ## ⚙️ Configuration
