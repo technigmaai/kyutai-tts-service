@@ -36,3 +36,4 @@ simplejson>=3.19.1
 datasets==2.18.0
 addict==2.4.0
 sortedcontainers==2.4.0
+fsspec[http]==2024.2.0

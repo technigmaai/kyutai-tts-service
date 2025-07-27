@@ -16,6 +16,6 @@ ans = pipeline(
     Tasks.acoustic_noise_suppression,
     model='iic/speech_zipenhancer_ans_multiloss_16k_base')
 result = ans(
-    'generated_speech-10.mp3',
+    '20250724-182608.wav',
     output_path='output_mp3_1.wav')
 print("done")
