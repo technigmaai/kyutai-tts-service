@@ -1,34 +1,24 @@
 # 🎵 GPU-Optimized Text-to-Speech Service
 
-A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features advanced GPU memory management, batch processing, audio cleaning, and SSML support. **Now with real ClearerVoice-Studio integration for professional-grade audio enhancement.**
+A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features ZipEnhancer noise suppression, SSML support for multiple voices, and optimized processing for AMD GPUs with ROCm.
 
 > **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
-
-## 📚 Documentation
-
-- **[Audio Cleaning Parameters Guide](AUDIO_CLEANING_PARAMETERS.md)** - Detailed explanation of how audio cleaning parameters work
-- **[ClearerVoice-Studio Integration](CLEARVOICE_INTEGRATION.md)** - Real ClearerVoice-Studio integration guide
 
 ## 🚀 Features
 
 ### Core Features
 - **GPU-Accelerated TTS**: Leverages AMD GPUs with ROCm for fast audio generation
-- **Real ClearerVoice-Studio Integration**: Professional-grade audio enhancement using the official repository
-- **ZipEnhancer Noise Suppression**: Advanced acoustic noise suppression using ModelScope's ZipEnhancer
-- **Advanced Memory Management**: Sophisticated GPU memory pooling and tensor reuse
-- **Batch Processing**: Concurrent processing of multiple text segments
-- **Audio Cleaning Pipeline**: GPU-accelerated noise reduction and audio enhancement
-- **SSML Support**: Voice control, pauses, and speech synthesis markup
-- **Multiple Output Formats**: MP3 and WAV support
-- **Caching System**: Intelligent audio caching for repeated requests
-- **Real-time Monitoring**: GPU/CPU usage and memory tracking
+- **ZipEnhancer Noise Suppression**: Advanced acoustic noise suppression with windowed processing for superior quality
+- **SSML Support**: Voice control, pauses, and speech synthesis markup for multiple voices
+- **20+ Voice Options**: Various emotional and stylistic voices (Happy, Sad, Angry, Calm, etc.)
+- **Memory Management**: Automatic temporary file cleanup and GPU optimization
+- **Professional Audio**: 44.1kHz/16-bit MP3 output with 320k bitrate
 
 ### Performance Optimizations
-- **ROCm Optimizations**: Flash attention, TF32, memory-efficient operations
-- **Parallel Processing**: Multiple GPU streams for concurrent operations
-- **Adaptive Memory Management**: Dynamic tensor allocation based on usage patterns
-- **Fast Mode**: Aggressive optimizations for speed-critical applications
-- **Request Queue Management**: Limits concurrent requests to prevent overload
+- **ROCm Integration**: Optimized for AMD GPUs with proper environment configuration
+- **Torch Optimization**: Multi-threaded processing with 8 CPU threads
+- **Windowed Processing**: Memory-efficient processing for large audio files
+- **Quality Modes**: Three processing levels (standard/high/ultra) for different use cases
 
 ## 📋 Requirements
 
@@ -130,8 +120,6 @@ curl -X POST "http://localhost:7861/api/tts" \
 
 ## 📚 API Documentation
 
-> **📖 Audio Cleaning Guide**: For detailed information about audio cleaning parameters, see the **[Audio Cleaning Parameters Guide](AUDIO_CLEANING_PARAMETERS.md)**.
-
 ### Endpoint: `POST /api/tts`
 
 Generate speech from text with advanced options.
@@ -142,22 +130,15 @@ Generate speech from text with advanced options.
 |-----------|------|---------|-------------|
 | `text` | string | **required** | Text to convert to speech |
 | `voice_choice` | string | "Happy" | Voice to use (Happy, Sad, Angry, etc.) |
-| `output_format` | string | "mp3" | Output format (mp3, wav) |
-| `apply_cleaning` | boolean | false | Enable audio cleaning pipeline |
-| `volume_boost` | float | 6.0 | Audio volume boost (0-20) |
-| `remove_crackles` | boolean | true | Remove audio crackles |
-| `apply_filters` | boolean | true | Apply audio filters |
-| `reduce_noise` | boolean | true | Reduce background noise |
-| `fast_mode` | boolean | false | Enable fast mode (aggressive optimizations) |
-| `filename` | string | null | Custom output filename |
-| `use_native_sample_rate` | boolean | true | Use model's native sample rate instead of 44.1kHz |
-| `use_clearvoice` | boolean | true | Use ClearerVoice-Studio for audio enhancement (if available) |
-| `clearvoice_enhancement` | boolean | false | Enable ClearerVoice enhancement (overrides apply_cleaning) |
+| `output_format` | string | "mp3" | Output format: "mp3" or "wav" |
+| `filename` | string | null | Custom output filename (extension auto-added) |
 | `apply_zipenhancer` | boolean | false | Enable ZipEnhancer noise suppression post-processing |
+| `zipenhancer_quality` | string | "high" | ZipEnhancer quality mode: "standard", "high", "ultra" |
+| `zipenhancer_window_size` | float | 2.0 | Window size in seconds for windowed processing (1.0-5.0) |
 
 #### Example Requests
 
-**Basic TTS:**
+**Basic TTS (MP3):**
 ```bash
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
@@ -169,36 +150,29 @@ curl -X POST "http://localhost:7861/api/tts" \
   --output hello.mp3
 ```
 
-**Advanced TTS with Cleaning:**
+**Basic TTS (WAV):**
 ```bash
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "This is high-quality audio with noise reduction.",
+    "text": "Hello world in high quality WAV format!",
     "voice_choice": "Happy",
-    "output_format": "wav",
-    "apply_cleaning": true,
-    "volume_boost": 8.0,
-    "remove_crackles": true,
-    "apply_filters": true,
-    "reduce_noise": true,
-    "filename": "clean_audio.wav"
+    "output_format": "wav"
   }' \
-  --output clean_audio.wav
+  --output hello.wav
 ```
 
-**Fast Mode (Speed Optimized):**
+**Custom Filename:**
 ```bash
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "Quick generation with optimized settings.",
+    "text": "This will have a custom filename!",
     "voice_choice": "Happy",
     "output_format": "mp3",
-    "fast_mode": true,
-    "filename": "fast_output.mp3"
+    "filename": "my_custom_audio"
   }' \
-  --output fast_output.mp3
+  --output my_custom_audio.mp3
 ```
 
 **SSML with Multiple Voices:**
@@ -207,162 +181,70 @@ curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "<speak><voice name=\"Happy\">Hello! This is a happy voice.</voice><break time=\"1s\"/><voice name=\"Sad\">And this is a sad voice.</voice><break time=\"2s\"/><voice name=\"Angry\">Finally, an angry voice!</voice></speak>",
-    "voice_choice": "Happy",
-    "output_format": "mp3",
-    "apply_cleaning": true,
-    "filename": "multi_voice.mp3"
+    "voice_choice": "Happy"
   }' \
   --output multi_voice.mp3
 ```
 
-**Native Sample Rate (Maximum Quality):**
+**ZipEnhancer Noise Suppression (Advanced Quality - WAV):**
 ```bash
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "This audio uses the model's native sample rate for maximum quality.",
+    "text": "This audio uses ZipEnhancer with high-quality windowed processing.",
     "voice_choice": "Happy",
     "output_format": "wav",
-    "use_native_sample_rate": true,
-    "apply_cleaning": false,
-    "filename": "native_quality.wav"
-  }' \
-  --output native_quality.wav
-```
-
-**Standard Sample Rate (Compatibility):**
-```bash
-curl -X POST "http://localhost:7861/api/tts" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "This audio uses standard 44.1kHz for maximum compatibility.",
-    "voice_choice": "Happy",
-    "output_format": "mp3",
-    "use_native_sample_rate": false,
-    "apply_cleaning": true,
-    "filename": "standard_quality.mp3"
-  }' \
-  --output standard_quality.mp3
-```
-
-**ClearerVoice-Studio Enhancement (Professional Quality):**
-```bash
-curl -X POST "http://localhost:7861/api/tts" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "This audio uses ClearerVoice-Studio for professional-grade enhancement.",
-    "voice_choice": "Happy",
-    "output_format": "wav",
-    "clearvoice_enhancement": true,
-    "use_clearvoice": true,
-    "filename": "professional_enhanced.wav"
-  }' \
-  --output professional_enhanced.wav
-```
-
-**Hybrid Enhancement (ClearerVoice + GPU Cleaning):**
-```bash
-curl -X POST "http://localhost:7861/api/tts" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "This audio uses both ClearerVoice and GPU cleaning for maximum quality.",
-    "voice_choice": "Happy",
-    "output_format": "mp3",
-    "clearvoice_enhancement": true,
-    "use_clearvoice": true,
-    "apply_cleaning": true,
-    "filename": "hybrid_enhanced.mp3"
-  }' \
-  --output hybrid_enhanced.mp3
-```
-
-**ZipEnhancer Noise Suppression (New Feature):**
-```bash
-curl -X POST "http://localhost:7861/api/tts" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "This audio uses ZipEnhancer for advanced acoustic noise suppression.",
-    "voice_choice": "Happy",
-    "output_format": "mp3",
     "apply_zipenhancer": true,
-    "filename": "zipenhancer_enhanced.mp3"
+    "zipenhancer_quality": "high",
+    "zipenhancer_window_size": 2.0
   }' \
-  --output zipenhancer_enhanced.mp3
+  --output zipenhancer_high_quality.wav
+```
+
+**ZipEnhancer Fast Mode (Standard Quality):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This uses ZipEnhancer in fast mode for quick processing.",
+    "voice_choice": "Happy",
+    "apply_zipenhancer": true,
+    "zipenhancer_quality": "standard",
+    "filename": "enhanced_fast_audio"
+  }' \
+  --output enhanced_fast_audio.mp3
+```
+
+**ZipEnhancer Ultra Quality (Small Windows):**
+```bash
+curl -X POST "http://localhost:7861/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This uses ZipEnhancer with ultra quality and smaller processing windows for maximum detail.",
+    "voice_choice": "Happy",
+    "apply_zipenhancer": true,
+    "zipenhancer_quality": "ultra",
+    "zipenhancer_window_size": 1.0
+  }' \
+  --output zipenhancer_ultra.mp3
 ```
 
 ### Other Endpoints
 
-#### Health Check
-```bash
-curl "http://localhost:7861/api/health"
-```
-
-#### List Available Voices
-```bash
-curl "http://localhost:7861/api/voices"
-```
-
-#### Memory Status
-```bash
-curl "http://localhost:7861/api/memory/stats"
-```
-
-#### Clean Audio Only
-```bash
-curl -X POST "http://localhost:7861/api/clean-audio" \
-  -F "audio_file=@path/to/audio.mp3" \
-  -F "volume_boost=6.0" \
-  -F "remove_crackles=true" \
-  -F "apply_filters=true" \
-  -F "reduce_noise=true"
-```
-
-#### ClearerVoice-Studio Enhancement
-```bash
-curl -X POST "http://localhost:7861/api/clearvoice-enhance" \
-  -F "audio_file=@path/to/audio.mp3" \
-  -F "use_clearvoice=true"
-```
-
 #### ZipEnhancer Status Check
 ```bash
 curl "http://localhost:7861/api/zipenhancer/status"
+# Returns: Available quality modes, configuration options, and status
 ```
 
 ## ⚙️ Configuration
 
 ### Performance Settings
 
-The service uses the following default configuration values:
-
-```python
-# Request Management
-MAX_CONCURRENT_REQUESTS = 4
-MAX_BATCH_SIZE = 16
-
-# GPU Optimizations
-ENABLE_FAST_MODE = True
-ENABLE_BATCH_PROCESSING = True
-ENABLE_CONCURRENT_CLEANING = True
-ENABLE_MODEL_QUANTIZATION = True
-ENABLE_PARALLEL_PROCESSING = True
-
-# Memory Management
-GPU_MEMORY_FRACTION = 0.90  # 90% of GPU memory
-MEMORY_POOL_MAX_FRACTION = 0.85  # 85% for memory pool
-```
-
-### Performance Settings
-
-#### Fast Mode Configuration
-- **Batch Size**: 24 (vs 16 in normal mode)
-- **GPU Memory Fraction**: 90% (configurable)
-- **Audio Cleaning**: Enabled with optimized settings
-
-#### Memory Management
-- **GPU Memory Pool**: Adaptive allocation based on available GPU memory
-- **Tensor Reuse**: Automatic cleanup and reuse
-- **Adaptive Allocation**: Based on usage patterns
+The service is pre-configured for optimal performance with:
+- **GPU Acceleration**: Automatic ROCm utilization for AMD GPUs
+- **Memory Management**: Automatic temporary file cleanup
+- **Torch Optimization**: 8 threads for CPU operations, optimized interop threads
 
 ## 🔧 Advanced Usage
 
@@ -379,45 +261,67 @@ The service supports Speech Synthesis Markup Language (SSML) for advanced voice 
 </speak>
 ```
 
-### Batch Processing
+### SSML Processing
 For multiple text segments, the service automatically:
-1. Parses SSML into segments
-2. Processes segments in batches
+1. Parses SSML into voice segments and pauses
+2. Processes each segment with the specified voice
 3. Reconstructs audio in original order
-4. Applies final cleaning and normalization
+4. Applies ZipEnhancer if requested
 
-### Audio Cleaning Pipeline
-The GPU-accelerated cleaning includes:
-- **Noise Reduction**: Background noise removal
-- **Crackle Removal**: Audio artifact cleanup
-- **Volume Normalization**: Consistent audio levels
-- **Filter Application**: High-quality audio filters
+
+
+### ZipEnhancer Quality Modes
+The service offers three ZipEnhancer processing modes:
+
+#### **Standard Mode** (`zipenhancer_quality: "standard"`)
+- **Processing**: Simple, single-pass enhancement
+- **Speed**: Fastest processing time
+- **Memory**: Low memory usage
+- **Best for**: Quick processing, shorter audio files
+
+#### **High Mode** (`zipenhancer_quality: "high"`) - **Default**
+- **Processing**: Windowed processing with 2-second chunks
+- **Speed**: Moderate processing time
+- **Memory**: Efficient memory usage for large files
+- **Quality**: Better noise suppression and artifact removal
+- **Best for**: Most use cases, balanced quality/speed
+
+#### **Ultra Mode** (`zipenhancer_quality: "ultra"`)
+- **Processing**: Same as High with optimized settings
+- **Speed**: Similar to High mode
+- **Quality**: Maximum noise suppression quality
+- **Best for**: Professional audio, critical applications
+
+### Window Size Configuration
+- **Default**: 2.0 seconds per processing window
+- **Range**: 1.0 - 5.0 seconds recommended
+- **Smaller windows**: Better quality, more processing time
+- **Larger windows**: Faster processing, potential quality trade-offs
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
-**1. CUDA Out of Memory**
+**1. GPU Memory Issues**
 ```bash
-# The service automatically manages GPU memory
-# Check memory usage via API
-curl "http://localhost:7861/api/memory/stats"
+# Check GPU availability
+python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 ```
 
 **2. Slow Performance**
 ```bash
-# Enable fast mode
+# Use standard mode for faster processing
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
-  -d '{"text": "test", "fast_mode": true}'
+  -d '{"text": "test", "apply_zipenhancer": true, "zipenhancer_quality": "standard"}'
 ```
 
 **3. Audio Quality Issues**
 ```bash
-# Enable audio cleaning
+# Enable ZipEnhancer for better quality
 curl -X POST "http://localhost:7861/api/tts" \
   -H "Content-Type: application/json" \
-  -d '{"text": "test", "apply_cleaning": true}'
+  -d '{"text": "test", "apply_zipenhancer": true, "zipenhancer_quality": "high"}'
 ```
 
 **4. Service Not Starting**
@@ -443,12 +347,14 @@ The service provides detailed logging:
 
 ```
 kyutai-tts-service/
-├── kyutai-tts-service.py    # Main service file
-├── README.md            # This file
-├── .gitignore          # Git ignore rules
-├── requirements.txt     # Python dependencies
-├── install.sh          # Automated installation script
-└── start.sh            # Quick start script
+├── kyutai-tts-service.py    # Main service file (469 lines)
+├── simple.py               # Original ZipEnhancer test script
+├── README.md               # This documentation
+├── .gitignore             # Git ignore rules
+├── requirements.txt        # Python dependencies
+├── install.sh             # Automated installation script
+├── start.sh               # Quick start script
+└── .venv/                 # Python virtual environment
 ```
 
 ## 🤝 Contributing
@@ -480,7 +386,7 @@ For issues and questions:
 
 ---
 
-**Last Updated**: July 21, 2025  
-**Version**: 3.0.0  
-**GPU Optimized**: ✅  
-**Production Ready**: ✅ 
+**Last Updated**: July 27, 2025  
+**Version**: 2.0.0  
+**GPU Optimized**: ✅ (AMD ROCm)  
+**ZipEnhancer Integrated**: ✅ 

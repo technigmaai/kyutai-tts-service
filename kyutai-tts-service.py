@@ -29,6 +29,8 @@ os.environ["HSA_OVERRIDE_GFX_VERSION"] = "11.0.0"
 try:
     from modelscope.pipelines import pipeline
     from modelscope.utils.constant import Tasks
+    from modelscope.fileio import File
+    import io
     ZIPENHANCER_AVAILABLE = True
     logger_temp = logging.getLogger(__name__)
     logger_temp.info("ZipEnhancer noise suppression available")
@@ -165,38 +167,257 @@ def parse_ssml(ssml_text: str, default_voice: str):
     logger.info(f"Parsed into {len(segments)} segments.")
     return segments
 
-def apply_zipenhancer(audio_path: str) -> str:
+def create_wav_header(dataflow, sample_rate=16000, num_channels=1, bits_per_sample=16):
     """
-    Apply ZipEnhancer noise suppression to audio file.
-    Returns path to enhanced audio file.
+    Create WAV file header bytes for raw PCM data.
+    
+    :param dataflow: Audio bytes data
+    :param sample_rate: Sample rate, default 16000
+    :param num_channels: Number of channels, default 1 (mono)
+    :param bits_per_sample: Bits per sample, default 16
+    :return: Complete WAV file bytes with header
+    """
+    total_data_len = len(dataflow)
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_chunk_size = total_data_len
+    fmt_chunk_size = 16
+    riff_chunk_size = 4 + (8 + fmt_chunk_size) + (8 + data_chunk_size)
+
+    # Build header with bytearray
+    header = bytearray()
+
+    # RIFF/WAVE header
+    header.extend(b'RIFF')
+    header.extend(riff_chunk_size.to_bytes(4, byteorder='little'))
+    header.extend(b'WAVE')
+
+    # fmt subchunk
+    header.extend(b'fmt ')
+    header.extend(fmt_chunk_size.to_bytes(4, byteorder='little'))
+    header.extend((1).to_bytes(2, byteorder='little'))  # Audio format (1 is PCM)
+    header.extend(num_channels.to_bytes(2, byteorder='little'))
+    header.extend(sample_rate.to_bytes(4, byteorder='little'))
+    header.extend(byte_rate.to_bytes(4, byteorder='little'))
+    header.extend(block_align.to_bytes(2, byteorder='little'))
+    header.extend(bits_per_sample.to_bytes(2, byteorder='little'))
+
+    # data subchunk
+    header.extend(b'data')
+    header.extend(data_chunk_size.to_bytes(4, byteorder='little'))
+
+    return bytes(header) + dataflow
+
+def apply_zipenhancer_windowed(audio_path: str, window_seconds: float = 2.0, 
+                              zipenhancer_sample_rate: int = 16000, use_streaming: bool = True) -> str:
+    """
+    Apply ZipEnhancer noise suppression with advanced windowed processing.
+    This provides better quality and memory efficiency for large audio files.
+    
+    :param audio_path: Path to input audio file
+    :param window_seconds: Window size in seconds for streaming processing
+    :param zipenhancer_sample_rate: ZipEnhancer target sample rate (16kHz)
+    :param use_streaming: Whether to use windowed streaming processing
+    :return: Path to enhanced audio file
     """
     if not ZIPENHANCER_AVAILABLE or not zipenhancer_pipeline:
         logger.warning("ZipEnhancer not available, skipping noise suppression")
         return audio_path
     
     try:
-        logger.info("Applying ZipEnhancer noise suppression...")
+        logger.info(f"Applying ZipEnhancer with windowed processing (window: {window_seconds}s, streaming: {use_streaming})")
         
         # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as enhanced_fp:
             enhanced_path = enhanced_fp.name
         
-        # Apply noise suppression using ZipEnhancer
-        result = zipenhancer_pipeline(
-            audio_path,
-            output_path=enhanced_path
-        )
+        if not use_streaming:
+            # Simple processing (original method) - resample first
+            logger.info("Using simple processing with resampling...")
+            
+            # Load and resample audio to 16kHz for ZipEnhancer
+            audio = AudioSegment.from_wav(audio_path)
+            resampled_audio = audio.set_frame_rate(zipenhancer_sample_rate).set_channels(1)
+            
+            # Create temporary resampled file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_resampled:
+                resampled_audio.export(temp_resampled.name, format="wav")
+                temp_resampled_path = temp_resampled.name
+            
+            try:
+                result = zipenhancer_pipeline(temp_resampled_path, output_path=enhanced_path)
+                logger.info(f"ZipEnhancer simple processing completed: {enhanced_path}")
+                os.remove(temp_resampled_path)
+                return enhanced_path
+            except Exception as e:
+                logger.error(f"Simple processing failed: {e}")
+                os.remove(temp_resampled_path)
+                return audio_path
         
-        logger.info(f"ZipEnhancer processing completed: {enhanced_path}")
+        # Advanced windowed processing
+        logger.info("Using advanced windowed processing with proper resampling...")
+        
+        # Load and resample audio to 16kHz for ZipEnhancer
+        audio = AudioSegment.from_wav(audio_path)
+        resampled_audio = audio.set_frame_rate(zipenhancer_sample_rate).set_channels(1)
+        
+        # Check if audio is shorter than window size - if so, use simple processing
+        audio_duration_seconds = len(resampled_audio) / 1000.0  # pydub uses milliseconds
+        if audio_duration_seconds <= window_seconds:
+            logger.info(f"Audio duration ({audio_duration_seconds:.2f}s) <= window size ({window_seconds}s), using simple processing instead")
+            
+            # Create temporary resampled file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_resampled:
+                resampled_audio.export(temp_resampled.name, format="wav")
+                temp_resampled_path = temp_resampled.name
+            
+            try:
+                result = zipenhancer_pipeline(temp_resampled_path, output_path=enhanced_path)
+                logger.info(f"ZipEnhancer simple processing completed: {enhanced_path}")
+                os.remove(temp_resampled_path)
+                return enhanced_path
+            except Exception as e:
+                logger.error(f"Simple processing failed: {e}")
+                os.remove(temp_resampled_path)
+                return audio_path
+        
+        # Export resampled audio to temporary file for processing
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_resampled:
+            resampled_audio.export(temp_resampled.name, format="wav")
+            temp_resampled_path = temp_resampled.name
+        
+        # Calculate window size in bytes for 16kHz audio (as in original simple.py)
+        window_size = int(window_seconds * zipenhancer_sample_rate * 2)  # 2 bytes per sample for 16-bit
+        logger.info(f"Window size: {window_size} bytes for {window_seconds}s at {zipenhancer_sample_rate}Hz")
+        
+        outputs = b''
+        total_bytes_len = 0
+        window_count = 0
+        
+        with open(temp_resampled_path, 'rb') as audiostream:
+            # Skip WAV header (44 bytes)
+            wav_header = audiostream.read(44)
+            
+            # Process audio in windows
+            for dataflow in iter(lambda: audiostream.read(window_size), b''):
+                if len(dataflow) == 0:
+                    break
+                    
+                total_bytes_len += len(dataflow)
+                window_count += 1
+                
+                logger.debug(f"Processing window {window_count}, size: {len(dataflow)} bytes")
+                
+                # Create WAV header for this chunk
+                wav_chunk = create_wav_header(dataflow, sample_rate=zipenhancer_sample_rate, 
+                                            num_channels=1, bits_per_sample=16)
+                
+                # Process chunk with ZipEnhancer
+                result = zipenhancer_pipeline(wav_chunk)
+                output_pcm = result['output_pcm']
+                outputs += output_pcm
+        
+        # Clean up temporary resampled file
+        os.remove(temp_resampled_path)
+        
+        # Trim output to original length
+        outputs = outputs[:total_bytes_len]
+        
+        # Create temporary 16kHz enhanced file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_enhanced_16k:
+            final_wav_16k = create_wav_header(outputs, sample_rate=zipenhancer_sample_rate, 
+                                            num_channels=1, bits_per_sample=16)
+            temp_enhanced_16k.write(final_wav_16k)
+            temp_enhanced_16k_path = temp_enhanced_16k.name
+        
+        # Resample back to 44.1kHz to match original TTS output
+        enhanced_audio_16k = AudioSegment.from_wav(temp_enhanced_16k_path)
+        enhanced_audio_44k = enhanced_audio_16k.set_frame_rate(44100)
+        enhanced_audio_44k.export(enhanced_path, format="wav")
+        
+        # Clean up temporary 16kHz file
+        os.remove(temp_enhanced_16k_path)
+        
+        logger.info(f"ZipEnhancer windowed processing completed: {enhanced_path} ({window_count} windows)")
         return enhanced_path
         
     except Exception as e:
-        logger.error(f"ZipEnhancer processing failed: {e}")
-        return audio_path  # Return original if enhancement fails
+        logger.error(f"ZipEnhancer windowed processing failed: {e}")
+        logger.info("Falling back to simple processing...")
+        
+        # Fallback to simple processing
+        try:
+            # Load and resample audio to 16kHz for ZipEnhancer
+            audio = AudioSegment.from_wav(audio_path)
+            resampled_audio = audio.set_frame_rate(zipenhancer_sample_rate).set_channels(1)
+            
+            # Create temporary resampled file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_resampled:
+                resampled_audio.export(temp_resampled.name, format="wav")
+                temp_resampled_path = temp_resampled.name
+            
+            result = zipenhancer_pipeline(temp_resampled_path, output_path=enhanced_path)
+            logger.info(f"ZipEnhancer fallback processing completed: {enhanced_path}")
+            os.remove(temp_resampled_path)
+            return enhanced_path
+        except Exception as fallback_error:
+            logger.error(f"ZipEnhancer fallback also failed: {fallback_error}")
+            return audio_path  # Return original if all enhancement fails
 
-def generate_audio(ssml_text: str, default_voice: str, apply_zipenhancer_enhancement: bool = False) -> str:
+def apply_zipenhancer(audio_path: str, use_advanced_processing: bool = True, 
+                     window_seconds: float = 2.0) -> str:
     """
-    Generates an MP3 audio file from an SSML or plain text string.
+    Apply ZipEnhancer noise suppression to audio file.
+    
+    :param audio_path: Path to input audio file
+    :param use_advanced_processing: Whether to use windowed processing for better quality
+    :param window_seconds: Window size for advanced processing
+    :return: Path to enhanced audio file
+    """
+    if use_advanced_processing:
+        return apply_zipenhancer_windowed(audio_path, window_seconds=window_seconds, 
+                                        zipenhancer_sample_rate=16000, use_streaming=True)
+    else:
+        # Simple processing (original method) with proper resampling
+        if not ZIPENHANCER_AVAILABLE or not zipenhancer_pipeline:
+            logger.warning("ZipEnhancer not available, skipping noise suppression")
+            return audio_path
+        
+        try:
+            logger.info("Applying ZipEnhancer noise suppression (simple mode with resampling)...")
+            
+            # Load and resample audio to 16kHz for ZipEnhancer
+            audio = AudioSegment.from_wav(audio_path)
+            resampled_audio = audio.set_frame_rate(16000).set_channels(1)
+            
+            # Create temporary resampled file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_resampled:
+                resampled_audio.export(temp_resampled.name, format="wav")
+                temp_resampled_path = temp_resampled.name
+            
+            # Create output file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as enhanced_fp:
+                enhanced_path = enhanced_fp.name
+            
+            try:
+                result = zipenhancer_pipeline(temp_resampled_path, output_path=enhanced_path)
+                logger.info(f"ZipEnhancer simple processing completed: {enhanced_path}")
+                os.remove(temp_resampled_path)
+                return enhanced_path
+            except Exception as e:
+                logger.error(f"ZipEnhancer processing failed: {e}")
+                os.remove(temp_resampled_path)
+                return audio_path
+            
+        except Exception as e:
+            logger.error(f"ZipEnhancer processing failed: {e}")
+            return audio_path
+
+def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3",
+                  apply_zipenhancer_enhancement: bool = False, zipenhancer_quality: str = "high", 
+                  zipenhancer_window_size: float = 2.0) -> str:
+    """
+    Generates an audio file from an SSML or plain text string in MP3 or WAV format.
     Optionally applies ZipEnhancer noise suppression as post-processing.
     """
     if not MODEL_LOADED:
@@ -215,7 +436,7 @@ def generate_audio(ssml_text: str, default_voice: str, apply_zipenhancer_enhance
 
         entries = tts_model.prepare_script([content], padding_between=1)
         voice_path = tts_model.get_voice_path(VOICE_OPTIONS.get(voice, VOICE_OPTIONS[default_voice]))
-        attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=2.5)
+        attributes = tts_model.make_condition_attributes([voice_path], cfg_coef=3.5)
         result = tts_model.generate([entries], [attributes])
 
         with tts_model.mimi.streaming(1), torch.no_grad():
@@ -249,30 +470,54 @@ def generate_audio(ssml_text: str, default_voice: str, apply_zipenhancer_enhance
     # Apply ZipEnhancer if requested
     if apply_zipenhancer_enhancement:
         logger.info("Applying ZipEnhancer post-processing...")
-        enhanced_wav_path = apply_zipenhancer(temp_wav_path)
+        
+        # Determine processing mode based on quality setting
+        use_advanced = zipenhancer_quality.lower() in ["high", "ultra"]
+        
+        enhanced_wav_path = apply_zipenhancer(
+            temp_wav_path, 
+            use_advanced_processing=use_advanced, 
+            window_seconds=zipenhancer_window_size
+        )
         
         # If enhancement was successful and created a new file, use it
         if enhanced_wav_path != temp_wav_path:
             os.remove(temp_wav_path)  # Remove original temp file
             temp_wav_path = enhanced_wav_path
     
-    # Load the final audio (potentially enhanced) and export as MP3
+    # Load the final audio (potentially enhanced) and export in requested format
     final_enhanced_audio = AudioSegment.from_wav(temp_wav_path)
     
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3_fp:
-        final_enhanced_audio.export(mp3_fp.name, format="mp3", bitrate="320k")
-        logger.info(f"Final audio successfully exported to {mp3_fp.name}")
+    # Validate output format
+    if output_format.lower() not in ["mp3", "wav"]:
+        logger.warning(f"Invalid output format '{output_format}', defaulting to MP3")
+        output_format = "mp3"
+    
+    output_format = output_format.lower()
+    file_suffix = f".{output_format}"
+    
+    with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as output_fp:
+        if output_format == "mp3":
+            final_enhanced_audio.export(output_fp.name, format="mp3", bitrate="320k")
+        else:  # wav
+            final_enhanced_audio.export(output_fp.name, format="wav")
+        
+        logger.info(f"Final audio successfully exported to {output_fp.name} (format: {output_format.upper()})")
         
         # Cleanup temporary WAV file
         os.remove(temp_wav_path)
         
-        return mp3_fp.name
+        return output_fp.name
 
 # --- API Endpoint ---
 class TTSRequest(BaseModel):
     text: str
     voice_choice: str = DEFAULT_VOICE
-    apply_zipenhancer: bool = False  # New parameter for ZipEnhancer post-processing
+    output_format: str = "mp3"  # Output format: "mp3" or "wav"
+    filename: str = None  # Custom output filename (without extension)
+    apply_zipenhancer: bool = False  # Enable ZipEnhancer post-processing
+    zipenhancer_quality: str = "high"  # Quality mode: "standard", "high", "ultra"
+    zipenhancer_window_size: float = 2.0  # Window size in seconds for advanced processing
 
 @app.post("/api/tts")
 def tts_endpoint(request: TTSRequest):
@@ -284,10 +529,37 @@ def tts_endpoint(request: TTSRequest):
     try:
         output_path = generate_audio(
             request.text, 
-            request.voice_choice, 
-            apply_zipenhancer_enhancement=request.apply_zipenhancer
+            request.voice_choice,
+            output_format=request.output_format,
+            apply_zipenhancer_enhancement=request.apply_zipenhancer,
+            zipenhancer_quality=request.zipenhancer_quality,
+            zipenhancer_window_size=request.zipenhancer_window_size
         )
-        return FileResponse(output_path, media_type="audio/mpeg", filename="generated_speech.mp3")
+        
+        # Set correct media type and filename based on output format
+        if request.output_format.lower() == "wav":
+            media_type = "audio/wav"
+            default_filename = "generated_speech.wav"
+            extension = ".wav"
+        else:  # default to mp3
+            media_type = "audio/mpeg"
+            default_filename = "generated_speech.mp3"
+            extension = ".mp3"
+        
+        # Use custom filename if provided, otherwise use default
+        if request.filename:
+            # Clean the filename of potentially harmful characters
+            import re
+            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', request.filename.strip())
+            # Ensure it doesn't end with the extension already
+            if safe_filename.lower().endswith(extension.lower()):
+                final_filename = safe_filename
+            else:
+                final_filename = safe_filename + extension
+        else:
+            final_filename = default_filename
+        
+        return FileResponse(output_path, media_type=media_type, filename=final_filename)
     except ValueError as e:
         logger.error(f"Invalid input provided: {e}")
         return JSONResponse(status_code=400, content={"detail": str(e)})
@@ -298,11 +570,18 @@ def tts_endpoint(request: TTSRequest):
 @app.get("/api/zipenhancer/status")
 def zipenhancer_status():
     """
-    Returns the status of ZipEnhancer availability.
+    Returns the status of ZipEnhancer availability and configuration options.
     """
     return {
         "zipenhancer_available": ZIPENHANCER_AVAILABLE,
-        "pipeline_loaded": zipenhancer_pipeline is not None
+        "pipeline_loaded": zipenhancer_pipeline is not None,
+        "quality_modes": {
+            "standard": "Simple processing, fastest speed",
+            "high": "Windowed processing, better quality (default)",
+            "ultra": "Same as high with optimal settings"
+        },
+        "default_window_size": 2.0,
+        "recommended_window_range": [1.0, 5.0]
     }
 
 # --- Main Execution ---
