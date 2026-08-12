@@ -37,6 +37,8 @@ RUN wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         rocblas \
+        rocsolver \
+        rocsparse \
         hipblaslt \
         miopen-hip \
         hip-runtime-amd \
