@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+
+# Legacy files (not needed in the image)
+archive
+
+# Audio / test outputs
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+test_*
+generated_speech.mp3
+
+# Local helpers / logs
+restart.sh
+*.log
+/tmp
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store

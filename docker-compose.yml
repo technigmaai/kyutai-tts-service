@@ -1,0 +1,34 @@
+# Kyutai TTS Service - Docker Compose (parallel option to bare-metal)
+#
+# Usage:
+#   docker compose up -d --build     # build + start
+#   docker compose logs -f           # follow logs
+#   docker compose down              # stop (keeps the model volume)
+#
+# Requires ROCm GPU passthrough: /dev/kfd + /dev/dri, video group,
+# and seccomp=unconfined (standard for ROCm in Docker).
+
+services:
+  kyutai-tts:
+    build: .
+    image: kyutai-tts:latest
+    container_name: kyutai-tts
+    ports:
+      - "7861:7861"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    security_opt:
+      - seccomp=unconfined
+    volumes:
+      - kyutai-models:/models
+    environment:
+      - HF_HOME=/models
+      - MODELSCOPE_CACHE=/models/modelscope
+      - MIOPEN_USER_DB_PATH=/models/miopen
+    restart: unless-stopped
+
+volumes:
+  kyutai-models:

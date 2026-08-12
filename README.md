@@ -62,6 +62,7 @@ curl -X POST "http://localhost:7861/api/tts" \
 | [**Configuration**](docs/CONFIGURATION.md) | `config.py` settings, ZipEnhancer modes, SSML |
 | [**Architecture**](docs/ARCHITECTURE.md) | Module breakdown, file structure, contributing |
 | [**Troubleshooting**](docs/TROUBLESHOOTING.md) | Common issues and log analysis |
+| [**Docker**](docs/DOCKER.md) | Containerized deployment (parallel option) |
 
 ## 📄 License
 
