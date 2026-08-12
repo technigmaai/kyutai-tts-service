@@ -41,8 +41,14 @@ RUN wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor \
         rocsparse \
         hipblas \
         hipblaslt \
+        hipfft \
+        hiprand \
+        hipsolver \
+        hipsparse \
+        hipsparselt \
         miopen-hip \
         hip-runtime-amd \
+        rccl \
     && rm -rf /var/lib/apt/lists/*
 
 ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
