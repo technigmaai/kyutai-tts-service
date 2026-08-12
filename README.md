@@ -2,7 +2,25 @@
 
 A high-performance, GPU-accelerated Text-to-Speech (TTS) service built with FastAPI, PyTorch, and Moshi TTS. Features ZipEnhancer noise suppression, SSML support for multiple voices, and optimized processing for AMD GPUs with ROCm. **Now with modular architecture for better maintainability and scalability.**
 
-> **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1150) with ROCm 6.3
+> **✅ Tested Hardware**: AMD Strix Halo (Ryzen AI Max+ 395) GPU (GFX1151 / Radeon 8060S) with ROCm 7.1.4
+
+## 🧰 Software Stack
+
+| Component | Version | Notes |
+|-----------|---------|-------|
+| **OS** | Ubuntu 26.04 LTS | tested on EVO-X2 |
+| **ROCm** | 7.1.4 | system-wide, native gfx1151 support |
+| **Python** | 3.13 | required — AMD ROCm wheels are cp310–cp313 only |
+| **PyTorch** | 2.9.1+rocm7.2.4 | AMD-built wheel (repo.radeon.com), native gfx1151 |
+| **torchaudio** | 2.9.0+rocm7.2.4 | AMD-built wheel |
+| **torchvision** | 0.24.0+rocm7.2.4 | AMD-built wheel |
+| **triton** | 3.5.1+rocm7.2.4 | AMD-built wheel |
+| **moshi** | 0.2.13 | TTS engine (pins `torch<2.10`) |
+| **modelscope** | 1.39.1 | ZipEnhancer noise suppression |
+| **FastAPI** | 0.141.1 | web framework |
+| **uvicorn** | 0.52.1 | ASGI server |
+| **librosa** | 1.0.0 | audio analysis |
+| **ffmpeg** | 7.0.2 (static) | pydub MP3 export (`~/bin`) |
 
 ## 🏗️ Architecture
 
@@ -99,30 +117,42 @@ cp ffmpeg-*-static/ffmpeg ffmpeg-*-static/ffprobe ~/bin/
 export LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}"
 ```
 
-### 5. ROCm Installation (Required for GPU Acceleration)
-The installer will automatically check for ROCm and offer to install it if needed. If you encounter ROCm library errors:
+### 4. ROCm Installation (Required for GPU Acceleration)
+ROCm must be installed system-wide for GPU acceleration. The installer (`./install.sh`) checks for ROCm and reports if it's missing.
 
 ```bash
-# Option 1: Use the comprehensive installer (recommended)
-sudo ./install.sh
-
-# Option 2: Manual installation
-# Follow the official guide: https://rocmdocs.amd.com/en/latest/deploy/linux/prerequisites.html
+# Manual installation
+# Follow the official guide: https://rocm.docs.amd.com/en/latest/deploy/linux/install.html
 ```
 
-### 6. Verify GPU Setup
+### 5. Verify GPU Setup
 ```bash
-python -c "import torch; print(f'ROCm available: {torch.cuda.is_available()}'); print(f'GPU count: {torch.cuda.device_count()}')"
+# From the repo directory, with the venv active
+LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib" .venv/bin/python -c "
+import torch
+print(f'ROCm available: {torch.cuda.is_available()}')
+print(f'GPU: {torch.cuda.get_device_name(0)}')
+print(f'Arch: {torch.cuda.get_device_properties(0).gcnArchName}')
+"
+```
+
+Expected output on EVO-X2:
+```
+ROCm available: True
+GPU: AMD Radeon 8060S Graphics
+Arch: gfx1151
 ```
 
 ## 🚀 Quick Start
 
 ### 1. Start the Service
 ```bash
-# Quick start (recommended) - uses modular main.py
+# Quick start (recommended) - sets LD_LIBRARY_PATH, PATH, and starts main.py
 ./start.sh
 
-# Or manual start with modular architecture
+# Or manual start (must set LD_LIBRARY_PATH first)
+export LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}"
+export PATH="$HOME/bin:$PATH"
 source .venv/bin/activate
 python main.py
 ```
@@ -305,7 +335,9 @@ curl "http://localhost:7861/api/zipenhancer/status"
 ### Performance Settings
 
 The service is pre-configured for optimal performance with:
-- **GPU Acceleration**: Automatic ROCm utilization for AMD GPUs
+- **GPU Acceleration**: Automatic ROCm utilization for AMD GPUs (native gfx1151)
+- **hipBLAS backend**: Uses plain hipBLAS instead of hipBLASLt (the AMD wheel's
+  hipBLASLt path is incompatible with system ROCm 7.1.4 — see Troubleshooting)
 - **Memory Management**: Automatic temporary file cleanup
 - **Torch Optimization**: 8 threads for CPU operations, optimized interop threads
 
@@ -313,7 +345,7 @@ The service is pre-configured for optimal performance with:
 
 Configuration is centralized in `config.py`:
 - **Model Settings**: TTS model repository and voice options
-- **GPU Settings**: ROCm environment variables and optimization
+- **GPU Settings**: ROCm environment variables and optimization (no HSA override needed)
 - **Audio Settings**: Default formats, bitrates, and sample rates
 - **ZipEnhancer Settings**: Quality modes and processing parameters
 - **Server Settings**: Host and port configuration
@@ -434,19 +466,36 @@ curl -X POST "http://localhost:7861/api/tts" \
 **4. Service Not Starting**
 ```bash
 # Check if all modular components are present
-python -c "from main import main; print('✅ Modular architecture working')"
+.venv/bin/python -c "from main import main; print('✅ Modular architecture working')"
 
-# Check GPU availability
-python -c "import torch; print(torch.cuda.is_available())"
+# Check GPU availability (must set LD_LIBRARY_PATH first)
+export LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}"
+.venv/bin/python -c "import torch; print(torch.cuda.is_available())"
 
 # Check dependencies
-pip list | grep torch
+.venv/bin/python -m pip list | grep -i torch
 
-# Verify HSA environment variable
-echo $HSA_OVERRIDE_GFX_VERSION
+# Check the service log
+cat /tmp/service.log
 ```
 
-**5. Import Errors (Modular Architecture)**
+> **Note**: `HSA_OVERRIDE_GFX_VERSION` is **no longer needed**. The AMD-built
+> PyTorch wheels support gfx1151 (Strix Halo) natively.
+
+**5. `HIPBLAS_STATUS_INVALID_VALUE` / `hipblasLtMatmulAlgoGetHeuristic` error**
+
+This happens when the AMD-built PyTorch wheel's hipBLASLt path is used against
+system ROCm 7.1.4 (missing `TensileLibrary_lazy_gfx1100.dat`). The service
+already handles this by forcing the plain hipBLAS backend in
+`tts/engine.py::initialize_environment()`. If you see this error, verify the
+backend is set:
+
+```bash
+.venv/bin/python -c "import torch; print(torch.backends.cuda.preferred_blas_library())"
+# Should print: _BlasBackend.Hipblas
+```
+
+**6. Import Errors (Modular Architecture)**
 ```bash
 # Verify all modules can be imported
 python -c "
@@ -489,15 +538,16 @@ kyutai-tts-service/
 │   └── ssml_parser.py     # 📄 SSML parsing and WAV utilities
 ├── archive/                # 📦 Legacy files (safely stored)
 │   ├── kyutai-tts-service.py    # Original monolithic service
-│   ├── kyutai-tts-service.py.backup # Backup copy
 │   └── simple.py               # Original ZipEnhancer test
 ├── README.md               # 📖 This documentation
 ├── .gitignore             # 🚫 Git ignore rules
 ├── requirements.txt        # 📋 Python dependencies
-├── install.sh             # 🔧 Automated installation (modular-aware)
-├── start.sh               # ▶️ Quick start script (modular-aware)
-└── .venv/                 # 🐍 Python virtual environment
+├── install.sh             # 🔧 Automated installation (uv + AMD wheels)
+└── start.sh               # ▶️ Quick start script (sets ROCm env, starts service)
 ```
+
+> `.venv/` is created locally by `install.sh` and is git-ignored. On EVO-X2 a
+> local `restart.sh` helper (not in git) restarts the running service.
 
 ## 🔄 Migration from Monolithic Version
 
@@ -545,8 +595,8 @@ For issues and questions:
 
 ---
 
-**Last Updated**: July 27, 2025  
-**Version**: 2.0.0 (Modular Architecture)  
-**GPU Optimized**: ✅ (AMD ROCm)  
+**Last Updated**: August 2025  
+**Version**: 2.1.0 (Modular Architecture, ROCm 7.x stack)  
+**GPU Optimized**: ✅ (AMD ROCm 7.1.4, native gfx1151)  
 **ZipEnhancer Integrated**: ✅  
 **Architecture**: ✅ Modular (main.py entry point) 
