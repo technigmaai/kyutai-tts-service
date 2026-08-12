@@ -169,11 +169,14 @@ elif [ -f "$HOME/bin/ffmpeg" ]; then
 else
     echo "📦 Downloading static ffmpeg..."
     mkdir -p "$HOME/bin"
-    cd /tmp
-    curl -sL -o ffmpeg.tar.xz "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-    tar xf ffmpeg.tar.xz
-    FF_DIR=$(ls -d ffmpeg-*-static | head -1)
-    cp "$FF_DIR/ffmpeg" "$FF_DIR/ffprobe" "$HOME/bin/"
+    # Use a subshell so the working directory is preserved for later steps
+    (
+        cd /tmp
+        curl -sL -o ffmpeg.tar.xz "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+        tar xf ffmpeg.tar.xz
+        FF_DIR=$(ls -d ffmpeg-*-static | head -1)
+        cp "$FF_DIR/ffmpeg" "$FF_DIR/ffprobe" "$HOME/bin/"
+    )
     chmod +x "$HOME/bin/ffmpeg" "$HOME/bin/ffprobe"
     echo "✅ ffmpeg installed to ~/bin"
 fi

@@ -150,6 +150,9 @@ Arch: gfx1151
 # Quick start (recommended) - sets LD_LIBRARY_PATH, PATH, and starts main.py
 ./start.sh
 
+# Restart a running instance in the background (logs to /tmp/service.log)
+./restart.sh
+
 # Or manual start (must set LD_LIBRARY_PATH first)
 export LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}"
 export PATH="$HOME/bin:$PATH"
@@ -543,11 +546,11 @@ kyutai-tts-service/
 ├── .gitignore             # 🚫 Git ignore rules
 ├── requirements.txt        # 📋 Python dependencies
 ├── install.sh             # 🔧 Automated installation (uv + AMD wheels)
-└── start.sh               # ▶️ Quick start script (sets ROCm env, starts service)
+├── start.sh               # ▶️ Quick start script (sets ROCm env, starts service)
+└── restart.sh             # 🔄 Restart helper (stops + starts service in background)
 ```
 
-> `.venv/` is created locally by `install.sh` and is git-ignored. On EVO-X2 a
-> local `restart.sh` helper (not in git) restarts the running service.
+> `.venv/` is created locally by `install.sh` and is git-ignored.
 
 ## 🔄 Migration from Monolithic Version
 
