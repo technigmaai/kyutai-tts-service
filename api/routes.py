@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 from api.models import TTSRequest, ZipEnhancerStatusResponse
 from tts.engine import generate_audio
-from audio.processing import ZIPENHANCER_AVAILABLE, zipenhancer_pipeline
+import audio.processing as audio_processing
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,8 @@ def zipenhancer_status():
     Returns the status of ZipEnhancer availability and configuration options.
     """
     return ZipEnhancerStatusResponse(
-        zipenhancer_available=ZIPENHANCER_AVAILABLE,
-        pipeline_loaded=zipenhancer_pipeline is not None,
+        zipenhancer_available=audio_processing.ZIPENHANCER_AVAILABLE,
+        pipeline_loaded=audio_processing.zipenhancer_pipeline is not None,
         quality_modes={
             "standard": "Simple processing, fastest speed",
             "high": "Windowed processing, better quality (default)",
