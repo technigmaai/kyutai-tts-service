@@ -84,6 +84,13 @@ def generate_audio(ssml_text: str, default_voice: str, output_format: str = "mp3
         logger.error("Cannot generate audio: Model is not loaded.")
         raise RuntimeError("Model not loaded")
 
+    # Validate the default voice so the fallback in parse_ssml is always valid.
+    # An invalid voice_choice from the API used to propagate here and raise
+    # KeyError on VOICE_OPTIONS[default_voice].
+    if default_voice not in VOICE_OPTIONS:
+        logger.warning(f"Voice '{default_voice}' not supported. Using default '{DEFAULT_VOICE}'.")
+        default_voice = DEFAULT_VOICE
+
     logger.info("Generating audio from parsed segments...")
     segments = parse_ssml(ssml_text, default_voice)
     output_audio_segments = []
