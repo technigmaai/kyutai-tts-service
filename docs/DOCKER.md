@@ -8,6 +8,11 @@ one of them.
 > which **exactly matches** the AMD-built PyTorch wheels (built for ROCm 7.2.4).
 > This avoids the hipBLASLt version-mismatch seen on hosts running a different
 > ROCm version (e.g. 7.1.4), and makes the whole stack reproducible.
+>
+> The slim ROCm base image only ships the core runtime, so the Dockerfile also
+> installs the compute libraries torch needs (rocBLAS, hipBLAS, hipBLASLt,
+> MIOpen, hipFFT, hipRAND, hipSolver, hipSparse, RCCL) from the matching
+> ROCm 7.2.4 apt repo.
 
 ---
 
