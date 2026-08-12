@@ -77,12 +77,17 @@ kyutai-tts-service/
 ├── archive/                # 📦 Legacy files (safely stored)
 │   ├── kyutai-tts-service.py    # Original monolithic service
 │   └── simple.py               # Original ZipEnhancer test
+├── scripts/                 # 🧪 Test suites
+│   ├── test.sh            # Main suite (all API features, port-parameterized)
+│   └── test_edge.sh       # Edge cases (voices, filename, bitrate, etc.)
 ├── docs/                   # 📚 Documentation
 │   ├── API.md             # 📡 API reference
 │   ├── INSTALLATION.md    # 🛠️ Installation guide
 │   ├── CONFIGURATION.md   # ⚙️ Configuration reference
 │   ├── ARCHITECTURE.md    # 🏗️ This document
-│   └── TROUBLESHOOTING.md # 🐛 Common issues
+│   ├── TROUBLESHOOTING.md # 🐛 Common issues
+│   ├── DOCKER.md          # 🐳 Docker deployment
+│   └── TESTING.md         # 🧪 Testing & validation
 ├── README.md               # 📖 Landing page
 ├── .gitignore             # 🚫 Git ignore rules
 ├── requirements.txt        # 📋 Python dependencies

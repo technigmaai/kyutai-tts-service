@@ -63,6 +63,7 @@ curl -X POST "http://localhost:7861/api/tts" \
 | [**Architecture**](docs/ARCHITECTURE.md) | Module breakdown, file structure, contributing |
 | [**Troubleshooting**](docs/TROUBLESHOOTING.md) | Common issues and log analysis |
 | [**Docker**](docs/DOCKER.md) | Containerized deployment (parallel option) |
+| [**Testing**](docs/TESTING.md) | Test suites, coverage, and validation approach |
 
 ## 📄 License
 
