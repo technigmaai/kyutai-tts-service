@@ -54,13 +54,30 @@ def parse_ssml(ssml_text: str, default_voice: str):
         
         elif node.tag == "break":
             duration_str = node.attrib.get("time", "500ms")
-            match = re.match(r"(\d+)", duration_str)
-            ms = int(match.group(1)) if match else 500
+            ms = parse_break_duration(duration_str)
             silence = AudioSegment.silent(duration=ms)
             segments.append(("PAUSE", silence))
             
     logger.info(f"Parsed into {len(segments)} segments.")
     return segments
+
+def parse_break_duration(duration_str: str) -> int:
+    """
+    Parse an SSML <break> time attribute into milliseconds.
+
+    Supports the SSML time formats: "500ms", "1s", "1.5s", "10s".
+    Defaults to 500ms if the value cannot be parsed.
+    """
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s)?\s*$", duration_str, re.IGNORECASE)
+    if not match:
+        logger.warning(f"Could not parse break duration '{duration_str}', defaulting to 500ms")
+        return 500
+    value = float(match.group(1))
+    unit = (match.group(2) or "ms").lower()
+    if unit == "s":
+        return int(value * 1000)
+    return int(value)
+
 
 def create_wav_header(dataflow, sample_rate=16000, num_channels=1, bits_per_sample=16):
     """

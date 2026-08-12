@@ -37,20 +37,28 @@ This service uses a **modular architecture** with clear separation of concerns:
 ## 📋 Requirements
 
 ### System Requirements
-- **OS**: Ubuntu 24.04 (tested)
-- **Python**: 3.12.10 (tested)
-- **GPU**: AMD GPU with ROCm support (tested on AMD Strix Halo GFX1150)
+- **OS**: Ubuntu 24.04+ (tested on Ubuntu 26.04 / EVO-X2)
+- **Python**: 3.13 (required — AMD ROCm wheels are cp310–cp313 only)
+- **GPU**: AMD GPU with ROCm support (tested on AMD Strix Halo GFX1151 / Radeon 8060S)
+- **ROCm**: 7.x (tested with 7.1.4)
 - **RAM**: 16GB+ system memory
 - **Storage**: 10GB+ free space for models and cache
-- **Environment**: `export HSA_OVERRIDE_GFX_VERSION=11.0.0` in ~/.bashrc
+- **ffmpeg**: required by pydub for MP3 export (static build in `~/bin` works)
+
+> **No `HSA_OVERRIDE_GFX_VERSION` hack needed anymore.** Modern ROCm (7.x) and the
+> AMD-built PyTorch wheels support gfx1151 (Strix Halo) natively.
 
 ### Software Requirements
-- **Python**: 3.12.10 (tested)
-- **ROCm**: 6.3+ (AMD GPU computing platform)
-- **PyTorch**: 2.7.1+ with ROCm support (AMD GPU optimized)
+- **Python**: 3.13 (tested)
+- **ROCm**: 7.x (AMD GPU computing platform)
+- **PyTorch**: 2.9.1+rocm7.2.4 (AMD-built wheel from repo.radeon.com)
 - **FastAPI**: Web framework
 - **Uvicorn**: ASGI server
 - **TTS Model**: Moshi TTS (kyutai/tts-1.6b-en_fr)
+
+> **Why AMD-built PyTorch wheels?** The official PyTorch ROCm wheels do **not**
+> include gfx1151 (Strix Halo) kernels. AMD's own wheels at `repo.radeon.com`
+> do. torch is pinned to 2.9.x because moshi requires `torch<2.10`.
 
 ## 🛠️ Installation
 
@@ -62,32 +70,33 @@ cd kyutai-tts-service
 
 ### 2. Quick Installation (Recommended)
 ```bash
-# Run the automated installation script (now with modular architecture validation)
-./install.sh
+# Install uv (fast Python package manager, no sudo needed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create virtual environment with Python 3.13
+uv venv --python 3.13 .venv
+
+# Install AMD-built PyTorch stack (gfx1151 support)
+VIRTUAL_ENV=.venv uv pip install \
+  https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torch-2.9.1%2Brocm7.2.4.lw.git39497456-cp313-cp313-linux_x86_64.whl \
+  https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/triton-3.5.1%2Brocm7.2.4.gita272dfa8-cp313-cp313-linux_x86_64.whl \
+  https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torchaudio-2.9.0%2Brocm7.2.4.gite3c6ee2b-cp313-cp313-linux_x86_64.whl \
+  https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torchvision-0.24.0%2Brocm7.2.4.gitb919bd0c-cp313-cp313-linux_x86_64.whl
+
+# Install the rest of the dependencies
+VIRTUAL_ENV=.venv uv pip install -r requirements.txt
+
+# Install ffmpeg (static build, no sudo needed) for pydub MP3 export
+mkdir -p ~/bin
+curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar xJ
+cp ffmpeg-*-static/ffmpeg ffmpeg-*-static/ffprobe ~/bin/
 ```
 
-### 3. Manual Installation (Alternative)
+### 3. Environment Setup (Required for AMD GPUs)
 ```bash
-# Create virtual environment
-python -m venv .venv
-
-# Activate virtual environment
-source .venv/bin/activate  # Linux/Mac
-# or
-.venv\Scripts\activate     # Windows
-
-# Install other dependencies (PyTorch packages are excluded from requirements.txt)
-pip install -r requirements.txt
-
-# Install PyTorch with ROCm support (as tested)
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
-```
-
-### 4. Environment Setup (Required for AMD GPUs)
-```bash
-# Add to your ~/.bashrc file for AMD GPU compatibility
-echo 'export HSA_OVERRIDE_GFX_VERSION=11.0.0' >> ~/.bashrc
-source ~/.bashrc
+# ROCm library path for AMD-built PyTorch wheels (libroctx64.so.4 etc.)
+# Must be set BEFORE launching Python — start.sh does this automatically.
+export LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}"
 ```
 
 ### 5. ROCm Installation (Required for GPU Acceleration)

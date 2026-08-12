@@ -1,11 +1,17 @@
-# Core PyTorch with ROCm support (tested installation)
-# IMPORTANT: Install PyTorch separately with ROCm support:
-# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
-# 
-# The following lines are commented out because pip doesn't support ROCm suffixes
-# torch>=2.7.1+rocm6.3
-# torchvision>=0.22.1+rocm6.3
-# torchaudio>=2.7.1+rocm6.3
+# Kyutai TTS Service - Python dependencies
+#
+# IMPORTANT: PyTorch is installed SEPARATELY from AMD's ROCm wheel repo, because
+# the official PyTorch ROCm wheels do NOT include gfx1151 (Strix Halo / Radeon
+# 8060S) kernels. Use the AMD-built wheels instead (see install.sh / README):
+#
+#   uv pip install \
+#     https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torch-2.9.1%2Brocm7.2.4.lw.git39497456-cp313-cp313-linux_x86_64.whl \
+#     https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/triton-3.5.1%2Brocm7.2.4.gita272dfa8-cp313-cp313-linux_x86_64.whl \
+#     https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torchaudio-2.9.0%2Brocm7.2.4.gite3c6ee2b-cp313-cp313-linux_x86_64.whl \
+#     https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torchvision-0.24.0%2Brocm7.2.4.gitb919bd0c-cp313-cp313-linux_x86_64.whl
+#
+# torch is pinned to 2.9.x because moshi (the TTS library) requires torch<2.10.
+# Python 3.13 is required (AMD wheels are cp310-cp313 only).
 
 # Web framework and server
 fastapi>=0.116.1
@@ -17,23 +23,25 @@ psutil>=7.0.0
 
 # Audio processing
 pydub>=0.25.1
-librosa==0.10.2.post1
-numpy>=1.26,<2.0
+librosa>=1.0.0
+numpy>=1.26,<2.3
 scipy>=1.16.0
-sphn>=0.1.0
-soundfile>=0.12.0
+sphn>=0.2.1
+soundfile>=0.14.0
+# audioop was removed in Python 3.13; pydub needs this backport
+audioop-lts>=0.2.2
 
 # Additional utilities
 requests>=2.32.4
 python-multipart>=0.0.20
 
 # TTS Model dependencies
-moshi==0.2.11
+moshi==0.2.13
 
 # ZipEnhancer Speech Denoising dependencies
 modelscope>=1.9.5
 simplejson>=3.19.1
-datasets==2.18.0
-addict==2.4.0
-sortedcontainers==2.4.0
-fsspec[http]==2024.2.0
+datasets>=2.18.0
+addict>=2.4.0
+sortedcontainers>=2.4.0
+fsspec[http]>=2024.2.0

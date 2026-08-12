@@ -38,11 +38,21 @@ VOICE_OPTIONS = {
 
 # GPU and Environment Configuration
 # These are set in the main service initialization
+#
+# NOTE: HSA_OVERRIDE_GFX_VERSION is intentionally NOT set. Modern ROCm (7.x) and
+# the AMD-built PyTorch wheels (repo.radeon.com) support gfx1151 (Strix Halo /
+# Radeon 8060S) natively, so the old gfx1100 override hack is no longer needed.
 GPU_ENV_VARS = {
     "MIOPEN_FIND_MODE": "FAST",
-    "MIOPEN_USER_DB_PATH": os.path.expanduser("~/Development/vscode/modelscope/miopen_cache"),
-    "HSA_OVERRIDE_GFX_VERSION": "11.0.0"
+    "MIOPEN_USER_DB_PATH": os.path.expanduser("~/.cache/miopen"),
 }
+
+# ROCm library path required by AMD-built PyTorch wheels (libroctx64.so.4 etc.)
+# Must be exported in the shell BEFORE launching Python (see start.sh).
+ROCM_LIB_PATHS = [
+    "/opt/rocm/core-7.14/lib",
+    "/opt/rocm/lib",
+]
 
 # Torch Configuration
 TORCH_NUM_THREADS = 8

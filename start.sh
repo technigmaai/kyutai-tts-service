@@ -12,6 +12,15 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
+# ROCm library path required by AMD-built PyTorch wheels (libroctx64.so.4 etc.)
+# Must be set BEFORE Python starts (dynamic linker reads it at process launch).
+export LD_LIBRARY_PATH="/opt/rocm/core-7.14/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}"
+
+# Add user-local bin (static ffmpeg for pydub MP3 export) to PATH
+if [ -d "$HOME/bin" ]; then
+    export PATH="$HOME/bin:$PATH"
+fi
+
 # Activate virtual environment
 echo "🔧 Activating virtual environment..."
 source .venv/bin/activate

@@ -35,6 +35,17 @@ def initialize_environment():
     for key, value in GPU_ENV_VARS.items():
         os.environ[key] = value
 
+    # Use the plain hipBLAS backend instead of hipBLASLt.
+    # The AMD-built PyTorch wheels (ROCm 7.2.4) call hipblasLtMatmulAlgoGetHeuristic,
+    # which fails against the system ROCm 7.1.4 hipBLASLt with
+    # HIPBLAS_STATUS_INVALID_VALUE (missing TensileLibrary_lazy_gfx1100.dat).
+    # The non-LT hipBLAS path works correctly on gfx1151 (Strix Halo).
+    try:
+        torch.backends.cuda.preferred_blas_library("hipblas")
+        logger.info("Using hipBLAS backend (hipBLASLt disabled for ROCm compatibility)")
+    except Exception as e:
+        logger.warning(f"Could not set preferred BLAS backend to hipblas: {e}")
+
 def initialize_tts_model():
     """Initialize the TTS model"""
     global MODEL_LOADED, tts_model
