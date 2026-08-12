@@ -29,7 +29,8 @@ docker run -d --rm \
   --device=/dev/kfd --device=/dev/dri \
   --group-add video --security-opt seccomp=unconfined \
   -p 7861:7861 \
-  -v kyutai-models:/models \
+  -v ${HOME}/.cache/huggingface:/root/.cache/huggingface \
+  -v ${HOME}/.cache/modelscope:/root/.cache/modelscope \
   kyutai-tts:latest
 ```
 
@@ -45,7 +46,8 @@ docker compose up -d --build
 | `--device=/dev/kfd --device=/dev/dri` | Pass the AMD GPU devices into the container |
 | `--group-add video` | Give the container access to the `video` group (GPU) |
 | `--security-opt seccomp=unconfined` | Required for ROCm runtime in Docker |
-| `-v kyutai-models:/models` | Persistent volume for the TTS + ZipEnhancer models (downloaded once) |
+| `-v ${HOME}/.cache/huggingface:/root/.cache/huggingface` | Share the host's HuggingFace model cache (container runs as root) |
+| `-v ${HOME}/.cache/modelscope:/root/.cache/modelscope` | Share the host's ModelScope cache (ZipEnhancer model) |
 
 ## Verify
 
@@ -61,8 +63,11 @@ curl http://localhost:7861/api/zipenhancer/status
 
 - **Port conflict**: if the bare-metal service is already on `7861`, change the
   container's host port, e.g. `-p 7862:7861`.
-- **Model cache**: the first startup downloads the ~3GB TTS model into the
-  `kyutai-models` volume. Subsequent restarts are fast.
+- **Shared model cache**: the container bind-mounts the host's default
+  HuggingFace / ModelScope cache dirs, so it reuses the models already
+  downloaded by the bare-metal service — no duplicate downloads, and both
+  deployments stay in sync. If the host cache is empty, the container will
+  download the models into it on first startup.
 - **hipBLAS backend**: the code still prefers the plain hipBLAS backend. With
   matching ROCm 7.2.4 in the container this is not strictly required, but it is
   harmless and keeps behavior consistent across hosts.

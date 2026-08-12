@@ -3,10 +3,14 @@
 # Usage:
 #   docker compose up -d --build     # build + start
 #   docker compose logs -f           # follow logs
-#   docker compose down              # stop (keeps the model volume)
+#   docker compose down              # stop
 #
 # Requires ROCm GPU passthrough: /dev/kfd + /dev/dri, video group,
 # and seccomp=unconfined (standard for ROCm in Docker).
+#
+# Model cache: the host's default HuggingFace / ModelScope cache dirs are
+# bind-mounted into the container, so both the bare-metal and the container
+# deployment share the same downloaded models (no duplicate downloads).
 
 services:
   kyutai-tts:
@@ -23,12 +27,7 @@ services:
     security_opt:
       - seccomp=unconfined
     volumes:
-      - kyutai-models:/models
-    environment:
-      - HF_HOME=/models
-      - MODELSCOPE_CACHE=/models/modelscope
-      - MIOPEN_USER_DB_PATH=/models/miopen
+      # Share the host's model caches (container runs as root, HOME=/root)
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ${HOME}/.cache/modelscope:/root/.cache/modelscope
     restart: unless-stopped
-
-volumes:
-  kyutai-models:

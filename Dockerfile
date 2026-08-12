@@ -81,11 +81,11 @@ RUN mkdir -p /usr/local/bin \
 # --- Application ----------------------------------------------------------
 COPY . .
 
-# Model caches live in a persistent volume (downloaded once, reused)
-ENV HF_HOME=/models \
-    MODELSCOPE_CACHE=/models/modelscope \
-    MIOPEN_USER_DB_PATH=/models/miopen
-VOLUME /models
+# Model caches: mount the host's default cache dirs at runtime so the
+# container reuses the models already downloaded by the bare-metal service
+# (see docker-compose.yml / docs/DOCKER.md). No volume needed here.
+#   -v ${HOME}/.cache/huggingface:/root/.cache/huggingface
+#   -v ${HOME}/.cache/modelscope:/root/.cache/modelscope
 
 EXPOSE 7861
 
