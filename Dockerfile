@@ -39,6 +39,7 @@ RUN wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor \
         rocblas \
         rocsolver \
         rocsparse \
+        hipblas \
         hipblaslt \
         miopen-hip \
         hip-runtime-amd \
