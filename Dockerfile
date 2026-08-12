@@ -23,7 +23,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
         git \
+        gpg \
+        wget \
     && rm -rf /var/lib/apt/lists/*
+
+# --- ROCm compute libraries ------------------------------------------------
+# The slim rocm/dev image ships only the core runtime; torch needs MIOpen,
+# rocBLAS and hipBLASLt. Install them from the matching ROCm 7.2.4 apt repo.
+RUN wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor \
+        -o /usr/share/keyrings/rocm-keyring.gpg \
+    && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/rocm-keyring.gpg] https://repo.radeon.com/rocm/apt/7.2.4 noble main' \
+        > /etc/apt/sources.list.d/rocm.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        rocblas \
+        hipblaslt \
+        miopen-hip \
+        hip-runtime-amd \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
 
 # --- uv + Python 3.13 (AMD ROCm wheels are cp310-cp313 only) --------------
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
